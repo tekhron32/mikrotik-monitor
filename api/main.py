@@ -327,3 +327,122 @@ async def ip_activity(
         {"domain": r[0], "hits": r[1], "last_seen": str(r[2])}
         for r in rows
     ]}
+
+# ─── Auto-update devices last_seen from ClickHouse ────────────────
+async def sync_devices_activity():
+    """Обновляет last_seen устройств на основе последних DNS/Flow данных"""
+    import asyncio
+    while True:
+        try:
+            ch = get_ch()
+            pg = await get_pg()
+            # Берём последние IP которые были активны за последний час
+            rows = ch.execute("""
+                SELECT toString(src_ip) as ip, max(ts) as last_ts
+                FROM dns_log
+                WHERE ts >= now() - INTERVAL 2 HOUR
+                GROUP BY src_ip
+                UNION ALL
+                SELECT toString(src_ip) as ip, max(ts) as last_ts
+                FROM flows
+                WHERE ts >= now() - INTERVAL 2 HOUR
+                GROUP BY src_ip
+            """)
+            # Группируем по IP берём максимальный ts
+            ip_ts = {}
+            for ip, ts in rows:
+                if ip not in ip_ts or ts > ip_ts[ip]:
+                    ip_ts[ip] = ts
+
+            # Обновляем devices
+            updated = 0
+            for ip, ts in ip_ts.items():
+                result = await pg.execute(
+                    "UPDATE devices SET last_seen=$1, ip_current=$2 WHERE ip_current=$2",
+                    ts, ip
+                )
+                if result != "UPDATE 0":
+                    updated += 1
+                else:
+                    # Устройство не найдено — создаём
+                    await pg.execute("""
+                        INSERT INTO devices (ip_current, mac_address, last_seen, location_id)
+                        VALUES ($1, $2, $3, 1)
+                        ON CONFLICT (mac_address) DO UPDATE
+                        SET ip_current=EXCLUDED.ip_current, last_seen=EXCLUDED.last_seen
+                    """, ip, f"00:00:00:00:{ip.split('.')[-2]:0>2}:{ip.split('.')[-1]:0>2}", ts)
+
+            if updated > 0:
+                log.info("Synced last_seen for %d devices", updated)
+        except Exception as e:
+            log.error("sync_devices error: %s", e)
+        await asyncio.sleep(30)
+
+@app.on_event("startup")
+async def startup_sync():
+    import asyncio
+    asyncio.create_task(sync_devices_activity())
+
+# ─── Domain details — кто заходил на домен ────────────────────────
+@app.get("/api/reports/domain-users")
+async def domain_users(
+    domain: str = Query(...),
+    hours: int = Query(24),
+):
+    ch = get_ch()
+    try:
+        rows = ch.execute("""
+            SELECT
+                toString(src_ip) as ip,
+                count() as hits,
+                max(ts) as last_seen
+            FROM dns_log
+            WHERE domain = %(domain)s
+              AND ts >= now() - INTERVAL %(h)s HOUR
+            GROUP BY src_ip
+            ORDER BY hits DESC
+            LIMIT 50
+        """, {"domain": domain, "h": hours})
+
+        pg = await get_pg()
+        result = []
+        for ip, hits, last_seen in rows:
+            # Ищем имя устройства
+            dev = await pg.fetchrow(
+                "SELECT hostname, mac_address, user_id FROM devices WHERE ip_current=$1", ip)
+            name = None
+            if dev and dev["user_id"]:
+                user = await pg.fetchrow("SELECT full_name FROM users WHERE id=$1", dev["user_id"])
+                if user: name = user["full_name"]
+            if not name and dev: name = dev["hostname"]
+            if not name: name = ip
+
+            result.append({
+                "ip": ip,
+                "name": name,
+                "hits": hits,
+                "last_seen": str(last_seen),
+                "mac": dev["mac_address"] if dev else None,
+            })
+        return {"domain": domain, "hours": hours, "data": result}
+    except Exception as e:
+        log.error("domain-users error: %s", e)
+        return {"domain": domain, "data": []}
+
+# ─── Search devices by IP or name ─────────────────────────────────
+@app.get("/api/devices/search")
+async def search_devices(q: str = Query(...)):
+    pg = await get_pg()
+    rows = await pg.fetch("""
+        SELECT d.id, d.mac_address, d.hostname, d.ip_current,
+               d.user_id, d.last_seen, u.full_name
+        FROM devices d
+        LEFT JOIN users u ON u.id = d.user_id
+        WHERE d.ip_current::text ILIKE $1
+           OR d.hostname ILIKE $1
+           OR u.full_name ILIKE $1
+           OR d.mac_address::text ILIKE $1
+        ORDER BY d.last_seen DESC NULLS LAST
+        LIMIT 20
+    """, f"%{q}%")
+    return {"data": [dict(r) for r in rows]}

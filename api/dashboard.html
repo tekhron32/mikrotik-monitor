@@ -84,6 +84,19 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .sess-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;display:inline-block}
 .sess-dot.active{background:var(--green);box-shadow:0 0 4px var(--green)}
 .sess-dot.inactive{background:var(--text3)}
+.tf-btn{background:var(--bg3);border:1px solid var(--border);color:var(--text2);padding:4px 10px;border-radius:5px;font-size:11px;cursor:pointer;font-family:var(--sans);white-space:nowrap;transition:all .15s}
+.tf-btn.on{background:rgba(59,130,246,.15);border-color:var(--accent);color:var(--accent)}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;display:flex;align-items:center;justify-content:center}
+.modal-box{background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:24px;width:460px;max-width:95vw;max-height:80vh;overflow-y:auto}
+.modal-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.modal-title{font-size:15px;font-weight:700}
+.modal-close{background:var(--bg3);border:1px solid var(--border2);color:var(--text2);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px}
+.modal-close:hover{border-color:var(--accent);color:var(--text)}
+.u-row{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;margin-bottom:6px;cursor:pointer;transition:border-color .15s}
+.u-row:hover{border-color:var(--accent)}
+.cat-pill{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:none;font-family:var(--sans);transition:all .2s;opacity:.65}
+.cat-pill:hover{opacity:1;transform:translateY(-1px)}
+.cat-pill.on{opacity:1;filter:brightness(1.1);box-shadow:0 2px 8px rgba(0,0,0,.3)}
 .empty{padding:50px;text-align:center;color:var(--text3)}
 .empty-icon{font-size:36px;margin-bottom:10px;opacity:.4}
 .placeholder{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;color:var(--text3);gap:10px;padding:40px;min-height:300px}
@@ -121,8 +134,8 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
       <div class="stat-sub">онлайн сейчас</div>
       <div class="tooltip"><div class="tt-title">Самые активные (1ч)</div><div id="tt-devices">—</div></div>
     </div>
-    <div class="stat">
-      <div class="stat-label">Топ сайт сегодня</div>
+    <div class="stat" onclick="openTopSites()" style="cursor:pointer">
+      <div class="stat-label">Топ сайт сегодня ↗</div>
       <div class="stat-value purple" id="s-top" style="font-size:16px;padding-top:4px">—</div>
       <div class="stat-sub" id="s-top2">—</div>
       <div class="tooltip"><div class="tt-title">Топ сайты (1ч)</div><div id="tt-sites">—</div></div>
@@ -137,6 +150,22 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
   <div class="layout">
     <div class="section" style="max-height:700px">
       <div class="sec-hdr"><div class="sec-title">Устройства</div><div class="badge" id="dev-count">0</div></div>
+      <div style="padding:6px 12px;border-bottom:1px solid var(--border);display:flex;gap:4px;flex-shrink:0">
+        <button class="tf-btn on" onclick="setTF(this,'all')">Все</button>
+        <button class="tf-btn" onclick="setTF(this,'pc')">💻 ПК</button>
+        <button class="tf-btn" onclick="setTF(this,'phone')">📱 Тел</button>
+        <button class="tf-btn" onclick="setTF(this,'sip')">☎️ SIP</button>
+        <button class="tf-btn" onclick="setTF(this,'other')">📡 Др</button>
+      </div>
+      <div style="padding:6px 12px;border-bottom:1px solid var(--border);display:flex;gap:6px;flex-shrink:0">
+        <input id="dev-srch" style="flex:1;background:var(--bg3);border:1px solid var(--border2);color:var(--text);padding:5px 9px;border-radius:6px;font-size:12px;outline:none;font-family:var(--sans)" placeholder="🔍 IP, имя, MAC..." oninput="renderDevs()">
+        <select id="dev-srt" style="background:var(--bg3);border:1px solid var(--border2);color:var(--text2);padding:5px 7px;border-radius:6px;font-size:11px;outline:none;cursor:pointer" onchange="renderDevs()">
+          <option value="dns">По DNS</option>
+          <option value="name">По имени</option>
+          <option value="ip">По IP</option>
+          <option value="online">Онлайн</option>
+        </select>
+      </div>
       <div class="devices" id="dev-list"><div class="loading"><div class="spinner"></div>Загрузка...</div></div>
     </div>
     <div class="section" style="max-height:700px" id="act-section">
@@ -158,12 +187,19 @@ function cat(s){return CATS[s]||'other';}
 function bc(s){return BARCOLS[cat(s)];}
 function fmtN(n){return n>=1000?(n/1000).toFixed(1)+'k':String(n);}
 
-let selDev=null,allDevs=[],hours=24,devDns={};
+let selDev=null,allDevs=[],hours=24,devDns={},typeFilter='all',catFilter=null,devRows=[],globalDns=[];
 let names=JSON.parse(localStorage.getItem('nb_names')||'{}');
+let customCats=JSON.parse(localStorage.getItem('nb_cats')||'{}');
+const CAT_DEF={'Facebook':'social','Instagram':'social','Telegram':'social','VK':'social','Twitter/X':'social','TikTok':'social','WhatsApp':'social','Reddit':'social','YouTube':'entertainment','Netflix':'entertainment','Spotify':'entertainment','Twitch':'entertainment','TradingView':'work','Google':'work','Gmail':'work','Microsoft':'work','Microsoft Office':'work','Outlook':'work','Zoom':'work','Slack':'work','RingCentral':'work','Uzbfreight':'work','DriveHOS':'work','Datatruck':'work','Alvys':'work','Steam':'gaming','Epic Games':'gaming','Roblox':'gaming','Windows Update':'system','Cloudflare DNS':'system','NTP':'system','Apple':'system','Google Services':'system','Cloudflare':'system','GDMS':'system','McAfee':'system','Google DNS':'system'};
+const CAT_INFO={work:{label:'💼 Работа',color:'#10b981'},social:{label:'👥 Соцсети',color:'#3b82f6'},entertainment:{label:'🎬 Развлечения',color:'#f97316'},gaming:{label:'🎮 Игры',color:'#ec4899'},system:{label:'⚙️ Система',color:'#6b7280'},other:{label:'🌐 Другое',color:'#8b5cf6'}};
+function getCat(s){return customCats[s]||CAT_DEF[s]||'other';}
+function getCatColor(s){return CAT_INFO[getCat(s)]?.color||'#8b5cf6';}
+function devType(d){const n=dn(d).toLowerCase();if(/iphone|ipad|android|mobile/i.test(n))return'phone';if(/sip|t[0-9]{2}w|yealink|grandstream/i.test(n))return'sip';if(/router|mikrotik|switch|nvr|camera|cam|printer/i.test(n))return'other';return'pc';}
+function setTF(btn,type){typeFilter=type;document.querySelectorAll('.tf-btn').forEach(b=>b.classList.remove('on'));btn.classList.add('on');renderDevs();}
 
 function dn(d){const k=d.mac_address||d.ip_current;if(names[k])return names[k];if(d.hostname&&d.hostname.trim())return d.hostname.trim();return d.ip_current||'Устройство';}
 function di(d){const n=dn(d).toLowerCase();if(/iphone|ipad/i.test(n))return'📱';if(/android|phone|mobile/i.test(n))return'📱';if(/sip|t[0-9]{2}w|yealink/i.test(n))return'☎️';if(/printer/i.test(n))return'🖨️';if(/router|mikrotik/i.test(n))return'🌐';if(/vmware|server/i.test(n))return'🖥️';return'💻';}
-function isOn(d){return d.last_seen&&Date.now()-new Date(d.last_seen).getTime()<30*60*1000;}
+function isOn(d){if(devDns[d.ip_current]>0)return true;return d.last_seen&&Date.now()-new Date(d.last_seen).getTime()<30*60*1000;}
 function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2500);}
 
 function ttRows(id,rows,max){
@@ -175,12 +211,13 @@ function ttRows(id,rows,max){
 async function loadGlobal(){
   try{
     const r=await fetch('/api/reports/dns-activity?hours=1&local_only=true&limit=5000');
-    const d=await r.json();const rows=d.data||[];
+    const d=await r.json();const rows=d.data||[];globalDns=rows;
     const total=rows.reduce((s,x)=>s+x.hits,0);
     document.getElementById('s-dns').textContent=fmtN(total);
     const byIp={},bySvc={};
     for(const r of rows){byIp[r.ip]=(byIp[r.ip]||0)+r.hits;const s=svc(r.domain);bySvc[s]=(bySvc[s]||0)+r.hits;}
     devDns=byIp;
+    document.getElementById('s-dev').textContent=allDevs.filter(d=>devDns[d.ip_current]>0).length||allDevs.filter(isOn).length;
     const ipS=Object.entries(byIp).sort((a,b)=>b[1]-a[1]);
     const svcS=Object.entries(bySvc).sort((a,b)=>b[1]-a[1]);
     ttRows('tt-dns',ipS.map(([ip,c])=>{const dv=allDevs.find(x=>x.ip_current===ip);return{i:dv?di(dv):'💻',n:dv?dn(dv):ip,v:fmtN(c),r:c};}),ipS[0]?.[1]||1);
@@ -213,9 +250,21 @@ async function loadDevices(){
 }
 
 function renderDevs(){
+  const q=(document.getElementById('dev-srch')?.value||'').toLowerCase().trim();
+  const sortBy=document.getElementById('dev-srt')?.value||'dns';
   const el=document.getElementById('dev-list');
   if(!allDevs.length){el.innerHTML='<div class="empty"><div class="empty-icon">📡</div>Нет устройств</div>';return;}
-  const sorted=[...allDevs].sort((a,b)=>{const ao=isOn(a)?1:0,bo=isOn(b)?1:0;if(ao!==bo)return bo-ao;return(devDns[b.ip_current]||0)-(devDns[a.ip_current]||0);});
+  let devs=[...allDevs];
+  if(q)devs=devs.filter(d=>(dn(d)||'').toLowerCase().includes(q)||(d.ip_current||'').includes(q)||(d.mac_address||'').toLowerCase().includes(q));
+  if(typeFilter!=='all')devs=devs.filter(d=>devType(d)===typeFilter);
+  if(!devs.length){el.innerHTML='<div class="empty"><div class="empty-icon">🔍</div>Ничего не найдено</div>';return;}
+  const sorted=devs.sort((a,b)=>{
+    if(sortBy==='dns'){const ao=isOn(a)?1:0,bo=isOn(b)?1:0;if(ao!==bo)return bo-ao;return(devDns[b.ip_current]||0)-(devDns[a.ip_current]||0);}
+    if(sortBy==='name')return(dn(a)||'').localeCompare(dn(b)||'');
+    if(sortBy==='ip'){const ai=(a.ip_current||'0.0.0.0').split('.').map(Number),bi=(b.ip_current||'0.0.0.0').split('.').map(Number);for(let i=0;i<4;i++)if(ai[i]!==bi[i])return ai[i]-bi[i];return 0;}
+    if(sortBy==='online')return(isOn(b)?1:0)-(isOn(a)?1:0);
+    return 0;
+  });
   el.innerHTML=sorted.map(d=>{
     const nm=dn(d),ic=di(d),act=selDev&&selDev.ip_current===d.ip_current,on=isOn(d);
     const mid=d.mac_address.replace(/:/g,'');
@@ -267,6 +316,16 @@ async function act(dev,h){
     const d=await r.json();const rows=d.data||[];
     const total=rows.reduce((s,x)=>s+x.hits,0);
     document.getElementById('act-count').textContent=total+' запросов';
+    devRows=rows; catFilter=null;
+    const catTotals={};
+    rows.forEach(row=>{const c=getCat(svc(row.domain));catTotals[c]=(catTotals[c]||0)+row.hits;});
+    const catBarEl=document.createElement('div');
+    catBarEl.style.cssText='padding:7px 14px;border-bottom:1px solid var(--border);display:flex;gap:5px;flex-wrap:wrap;flex-shrink:0';
+    catBarEl.innerHTML=Object.entries(catTotals).sort((a,b)=>b[1]-a[1]).map(([c,cnt])=>{
+      const ci=CAT_INFO[c]||{label:c,color:'#8b5cf6'};
+      return`<button class="cat-pill" onclick="toggleCat(this,'${c}')" style="background:${ci.color}20;color:${ci.color};box-shadow:inset 0 0 0 1px ${ci.color}40">${ci.label} <strong>${Math.round(cnt/total*100)}%</strong></button>`;
+    }).join('');
+    sec.querySelector('.loading').before(catBarEl);
     if(!rows.length){sec.querySelector('.loading').outerHTML='<div class="empty"><div class="empty-icon">🔇</div>Нет активности за этот период</div>';return;}
     const maxH=rows[0].hits;
     const list=document.createElement('div');list.className='domain-list';
@@ -279,15 +338,14 @@ async function act(dev,h){
       const activeEl = isActive
         ? '<span class="sess-dot active" title="Активно сейчас"></span>'
         : '<span class="sess-dot inactive" title="'+row.last_seen+'"></span>';
-      return`<div class="domain-row">
+      const catC=getCatColor(s);
+      return`<div class="domain-row" style="cursor:pointer" onclick="openDomainMenu('${row.domain.replace(/'/g,"\\'")}','${s.replace(/'/g,"\\'")}','${getCat(s)}')">
         <div class="d-icon">${i}</div>
-        <div class="d-info">
-          <div class="d-svc">${s}</div>
-          <div class="d-raw">${row.domain}</div>
-        </div>
+        <div class="d-info"><div class="d-svc">${s}</div><div class="d-raw">${row.domain}</div></div>
         ${activeEl}
         <div class="d-hits">${row.hits}×</div>
-        <div class="d-bar-w"><div class="d-bar"><div class="d-bar-f" style="width:${pct}%;background:${col}"></div></div></div>
+        <span onclick="event.stopPropagation();openCatEdit('${s.replace(/'/g,"\\'")}','${getCat(s)}')" style="font-size:10px;padding:1px 5px;border-radius:3px;border:1px solid ${catC};color:${catC};cursor:pointer" title="Изменить категорию">${CAT_INFO[getCat(s)]?.label.split(' ')[0]||'🌐'}</span>
+        <div class="d-bar-w"><div class="d-bar"><div class="d-bar-f" style="width:${pct}%;background:${catC}"></div></div></div>
       </div>`;
     }).join('');
     sec.querySelector('.loading').replaceWith(list);
@@ -296,6 +354,86 @@ async function act(dev,h){
 
 function chH(h){hours=h;if(selDev)act(selDev,h);}
 
+function toggleCat(btn,cat){
+  const isOn=btn.classList.contains('on');
+  document.querySelectorAll('.cat-pill').forEach(b=>b.classList.remove('on'));
+  catFilter=isOn?null:cat; if(!isOn)btn.classList.add('on');
+  const list=document.querySelector('.domain-list'); if(!list||!devRows.length)return;
+  const rows=catFilter?devRows.filter(r=>getCat(svc(r.domain))===catFilter):devRows;
+  const maxH=rows[0]?.hits||1,nowTs=Date.now();
+  list.innerHTML=rows.map(row=>{
+    const s=svc(row.domain),i=ico(s),pct=Math.round(row.hits/maxH*100),catC=getCatColor(s);
+    const isActive=(nowTs-new Date(row.last_seen.replace(' ','T')+'Z').getTime())<5*60*1000;
+    const ae=isActive?'<span class="sess-dot active"></span>':'<span class="sess-dot inactive"></span>';
+    return`<div class="domain-row" style="cursor:pointer" onclick="openDomainMenu('${row.domain.replace(/'/g,"\\'")}','${s.replace(/'/g,"\\'")}','${getCat(s)}')">
+      <div class="d-icon">${i}</div><div class="d-info"><div class="d-svc">${s}</div><div class="d-raw">${row.domain}</div></div>
+      ${ae}<div class="d-hits">${row.hits}×</div>
+      <span onclick="event.stopPropagation();openCatEdit('${s.replace(/'/g,"\\'")}','${getCat(s)}')" style="font-size:10px;padding:1px 5px;border-radius:3px;border:1px solid ${catC};color:${catC};cursor:pointer">${CAT_INFO[getCat(s)]?.label.split(' ')[0]||'🌐'}</span>
+      <div class="d-bar-w"><div class="d-bar"><div class="d-bar-f" style="width:${pct}%;background:${catC}"></div></div></div>
+    </div>`;
+  }).join('');
+}
+function openCatEdit(svcName,currentCat){
+  document.getElementById('cat-modal')?.remove();
+  const bg=document.createElement('div');bg.className='modal-bg';bg.id='cat-modal';
+  bg.onclick=e=>{if(e.target===bg)bg.remove();};
+  bg.innerHTML=`<div class="modal-box"><div class="modal-hdr"><div class="modal-title">${ico(svcName)} ${svcName}</div><button class="modal-close" onclick="document.getElementById('cat-modal').remove()">✕</button></div>
+    <div style="font-size:11px;color:var(--text2);margin-bottom:14px">Применится ко всем пользователям</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      ${Object.entries(CAT_INFO).map(([id,ci])=>`<button onclick="saveCat('${svcName.replace(/'/g,"\\'")}','${id}')" style="display:flex;align-items:center;gap:8px;padding:10px;background:${id===currentCat?'rgba(59,130,246,.15)':'var(--bg3)'};border:${id===currentCat?'2':'1'}px solid ${id===currentCat?'var(--accent)':ci.color};border-radius:8px;cursor:pointer;font-size:13px;font-family:var(--sans);color:var(--text)">${ci.label.split(' ')[0]} ${ci.label.split(' ').slice(1).join(' ')}${id===currentCat?' ✓':''}</button>`).join('')}
+    </div>
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);display:flex;justify-content:space-between">
+      <button onclick="resetCat('${svcName.replace(/'/g,"\\'")}');document.getElementById('cat-modal').remove()" style="background:rgba(239,68,68,.1);border:1px solid var(--red);color:var(--red);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px">↺ Сброс</button>
+      <button onclick="document.getElementById('cat-modal').remove()" style="background:var(--bg3);border:1px solid var(--border2);color:var(--text2);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px">Отмена</button>
+    </div></div>`;
+  document.body.appendChild(bg);
+}
+function saveCat(svcName,newCat){customCats[svcName]=newCat;localStorage.setItem('nb_cats',JSON.stringify(customCats));document.getElementById('cat-modal')?.remove();toast('✓ '+svcName+' → '+(CAT_INFO[newCat]?.label||newCat));if(selDev)act(selDev,hours);}
+function resetCat(svcName){delete customCats[svcName];localStorage.setItem('nb_cats',JSON.stringify(customCats));toast('↺ Сброс: '+svcName);if(selDev)act(selDev,hours);}
+async function openDomainMenu(domain,svcName,currentCat){
+  document.getElementById('du-modal')?.remove();
+  const bg=document.createElement('div');bg.className='modal-bg';bg.id='du-modal';
+  bg.onclick=e=>{if(e.target===bg)bg.remove();};
+  bg.innerHTML=`<div class="modal-box"><div class="modal-hdr"><div class="modal-title">${ico(svcName)} ${svcName}</div><button class="modal-close" onclick="document.getElementById('du-modal').remove()">✕</button></div>
+    <div style="font-size:10px;color:var(--text3);margin-bottom:8px;font-family:var(--mono)">${domain}</div>
+    <button onclick="openCatEdit('${svcName.replace(/'/g,"\\'")}','${currentCat}')" style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:5px;background:rgba(59,130,246,.1);border:1px solid var(--accent);color:var(--accent);cursor:pointer;font-size:11px;margin-bottom:14px">✏️ Изменить категорию</button>
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text2);margin-bottom:8px;font-family:var(--mono)">Кто заходил (${hours}ч)</div>
+    <div id="du-list"><div class="loading"><div class="spinner"></div></div></div></div>`;
+  document.body.appendChild(bg);
+  try{
+    const r=await fetch('/api/reports/domain-users?domain='+encodeURIComponent(domain)+'&hours='+hours);
+    const d=await r.json();const rows=d.data||[];
+    const el=document.getElementById('du-list');if(!el)return;
+    if(!rows.length){el.innerHTML='<div style="text-align:center;color:var(--text3);padding:12px">Нет данных</div>';return;}
+    const maxH=rows[0].hits;
+    el.innerHTML=rows.map(u=>`<div class="u-row" onclick="document.getElementById('du-modal').remove();selByIp('${u.ip}')">
+      <div style="font-size:16px">💻</div>
+      <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">${u.name}</div><div style="font-size:10px;color:var(--text3);font-family:var(--mono)">${u.ip}</div></div>
+      <div style="font-size:12px;font-family:var(--mono);color:var(--text2);margin-right:8px">${fmtN(u.hits)}×</div>
+      <div style="width:50px"><div style="height:3px;background:var(--border);border-radius:2px"><div style="height:100%;width:${Math.round(u.hits/maxH*100)}%;background:var(--accent);border-radius:2px"></div></div></div>
+    </div>`).join('');
+  }catch(e){console.error(e);}
+}
+function selByIp(ip){const dev=allDevs.find(d=>d.ip_current===ip);if(dev)sel(dev);else toast('Не найдено: '+ip);}
+function openTopSites(){
+  const bySvc={};
+  globalDns.forEach(row=>{const s=svc(row.domain);if(!bySvc[s])bySvc[s]={name:s,domain:row.domain,hits:0};bySvc[s].hits+=row.hits;});
+  const sorted=Object.values(bySvc).sort((a,b)=>b.hits-a.hits).slice(0,25);
+  const maxH=sorted[0]?.hits||1;
+  document.getElementById('top-modal')?.remove();
+  const bg=document.createElement('div');bg.className='modal-bg';bg.id='top-modal';
+  bg.onclick=e=>{if(e.target===bg)bg.remove();};
+  bg.innerHTML=`<div class="modal-box"><div class="modal-hdr"><div class="modal-title">📊 Топ сайтов за 1 час</div><button class="modal-close" onclick="document.getElementById('top-modal').remove()">✕</button></div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:12px">Кликните → кто заходил + изменить категорию</div>
+    ${sorted.map(item=>{const c=getCatColor(item.name);return`<div class="u-row" onclick="document.getElementById('top-modal').remove();openDomainMenu('${item.domain.replace(/'/g,"\\'")}','${item.name.replace(/'/g,"\\'")}','${getCat(item.name)}')">
+      <div style="font-size:18px">${ico(item.name)}</div>
+      <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">${item.name}</div><div style="font-size:10px;color:var(--text3);font-family:var(--mono)">${item.domain}</div></div>
+      <div style="font-size:12px;font-family:var(--mono);color:${c};margin-right:8px">${fmtN(item.hits)}×</div>
+      <div style="width:50px"><div style="height:3px;background:var(--border);border-radius:2px"><div style="height:100%;width:${Math.round(item.hits/maxH*100)}%;background:${c};border-radius:2px"></div></div></div>
+    </div>`;}).join('')}
+  </div>`;
+  document.body.appendChild(bg);
+}
 async function loadAll(){
   await Promise.all([loadSummary(),loadDevices()]);
   await loadGlobal();
