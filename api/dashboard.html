@@ -320,7 +320,10 @@ async function act(dev,h){
     <div class="act-hdr">
       <div class="act-av">${ic}</div>
       <div><div class="act-name">${nm}</div><div class="act-ip">${dev.ip_current}</div></div>
-      <div class="time-filter">${[1,4,24,168].map(x=>`<button class="time-btn${x===h?' active':''}" onclick="chH(${x})">${x===168?'7д':x+'ч'}</button>`).join('')}</div>
+      <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
+        <button onclick="aiAnalyzeAll('${nm.replace(/'/g,"\\'")}',event)" style="background:rgba(139,92,246,.15);border:1px solid var(--purple);color:var(--purple);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px;font-family:var(--sans);display:flex;align-items:center;gap:5px" title="AI проверит все домены и назначит категории">🤖 AI анализ</button>
+        <div class="time-filter">${[1,4,24,168].map(x=>`<button class="time-btn${x===h?' active':''}" onclick="chH(${x})">${x===168?'7д':x+'ч'}</button>`).join('')}</div>
+      </div>
     </div>
     <div class="loading"><div class="spinner"></div>Загрузка...</div>`;
   try{
@@ -538,6 +541,88 @@ async function aiCheckDomain(svcName, domain, btn) {
   }
   btn.disabled = false;
   btn.innerHTML = '🤖 AI проверка';
+}
+
+async function aiAnalyzeAll(devName, event) {
+  const btn = event.target;
+  const rows = devRows;
+  if(!rows || !rows.length){toast('Нет доменов для анализа','yellow');return;}
+
+  // Получаем уникальные сервисы которые ещё не категоризированы вручную
+  const services = [...new Set(rows.map(r=>svc(r.domain)))];
+  const uncategorized = services.filter(s=>!customCats[s]);
+  const total = uncategorized.length;
+
+  if(total === 0){toast('Все домены уже категоризированы!');return;}
+
+  btn.disabled = true;
+  btn.innerHTML = '⏳ 0/' + total;
+
+  // Прогресс модалка
+  const bg = document.createElement('div');
+  bg.className = 'modal-bg'; bg.id = 'ai-all-modal';
+  bg.innerHTML = `<div class="modal-box" style="width:500px">
+    <div class="modal-hdr">
+      <div class="modal-title">🤖 AI анализ доменов: ${devName}</div>
+      <button class="modal-close" onclick="document.getElementById('ai-all-modal').remove()">✕</button>
+    </div>
+    <div style="font-size:11px;color:var(--text2);margin-bottom:12px">Анализирую ${total} доменов...</div>
+    <div style="background:var(--bg3);border-radius:6px;height:6px;margin-bottom:16px">
+      <div id="ai-progress-bar" style="height:100%;width:0%;background:var(--purple);border-radius:6px;transition:width .3s"></div>
+    </div>
+    <div id="ai-results" style="display:flex;flex-direction:column;gap:4px;max-height:400px;overflow-y:auto"></div>
+    <div id="ai-summary" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);display:none">
+      <div style="font-size:12px;color:var(--green);font-weight:600" id="ai-done-msg"></div>
+      <button onclick="document.getElementById('ai-all-modal').remove();if(selDev)act(selDev,hours)" style="margin-top:8px;background:var(--accent);border:none;color:#fff;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-family:var(--sans)">✓ Применить и обновить</button>
+    </div>
+  </div>`;
+  document.body.appendChild(bg);
+
+  const rules = Object.entries(customCats).map(([s,c])=>s+'='+c).join(', ');
+  const resultsEl = document.getElementById('ai-results');
+  const progressBar = document.getElementById('ai-progress-bar');
+  let done = 0, applied = 0;
+
+  // Анализируем пакетами по 3 параллельно
+  for(let i=0; i<uncategorized.length; i+=3){
+    const batch = uncategorized.slice(i, i+3);
+    await Promise.all(batch.map(async s=>{
+      try{
+        const domain = rows.find(r=>svc(r.domain)===s)?.domain || s;
+        const resp = await fetch('/api/domain-category?domain='+encodeURIComponent(domain)+'&custom_rules='+encodeURIComponent(rules));
+        const result = await resp.json();
+        done++;
+        progressBar.style.width = Math.round(done/total*100)+'%';
+        btn.innerHTML = '⏳ '+done+'/'+total;
+
+        if(result.ok){
+          const ci = CAT_INFO[result.category]||{label:result.category,color:'#8b5cf6'};
+          customCats[s] = result.category;
+          applied++;
+          if(resultsEl){
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 10px;background:'+ci.color+'18;border-radius:6px;font-size:12px';
+            row.innerHTML = '<span style="font-size:14px">'+ico(s)+'</span><span style="flex:1;font-weight:600">'+s+'</span><span style="color:'+ci.color+';font-weight:700">'+ci.label+'</span>'+(result.safe===false?'<span style="color:var(--red);font-size:10px">⚠️</span>':'');
+            resultsEl.appendChild(row);
+            resultsEl.scrollTop = resultsEl.scrollHeight;
+          }
+        }
+      }catch(e){done++;}
+    }));
+    await new Promise(r=>setTimeout(r,300)); // пауза между батчами
+  }
+
+  // Сохраняем все
+  localStorage.setItem('nb_cats', JSON.stringify(customCats));
+  progressBar.style.width = '100%';
+  btn.innerHTML = '🤖 AI анализ';
+  btn.disabled = false;
+
+  const summaryEl = document.getElementById('ai-summary');
+  const doneMsg = document.getElementById('ai-done-msg');
+  if(summaryEl) summaryEl.style.display='block';
+  if(doneMsg) doneMsg.textContent = '✓ Готово! Категоризировано: '+applied+' из '+total+' доменов';
+  toast('✓ AI категоризировал '+applied+' доменов');
 }
 
 async function loadAll(){
