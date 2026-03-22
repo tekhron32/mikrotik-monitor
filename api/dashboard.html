@@ -478,40 +478,31 @@ async function aiCheckDomain(svcName, domain, btn) {
   const resultId = 'ai-result-' + svcName.replace(/[^a-z0-9]/gi,'_');
   const resultEl = document.getElementById(resultId);
   if(resultEl) resultEl.innerHTML = '<div style="text-align:center;padding:8px;color:var(--text2);font-size:12px">⏳ Спрашиваю Claude...</div>';
-
   try {
-    // Передаём кастомные правила в AI
-    const rules = Object.entries(customCats).map(([s,c])=>s+' = '+c).join(', ');
+    const rules = Object.entries(customCats).map(([s,c])=>s+'='+c).join(', ');
     const resp = await fetch('/api/domain-category?domain='+encodeURIComponent(domain)+'&custom_rules='+encodeURIComponent(rules));
     const result = await resp.json();
     if(!result.ok) throw new Error(result.error||'API error');
-
-    const ci = CAT_INFO[result.category] || {label: result.category, color: '#8b5cf6'};
-    if(resultEl) {
-      resultEl.innerHTML = `<div style="padding:10px;border-radius:8px;background:${ci.color}20;border:1px solid ${ci.color}40">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-          <span style="font-size:16px">${ci.label.split(' ')[0]}</span>
-          <strong style="color:${ci.color}">${ci.label}</strong>
-          ${result.safe===false?'<span style="background:rgba(239,68,68,.2);color:var(--red);padding:1px 6px;border-radius:4px;font-size:10px;border:1px solid var(--red)">⚠️ ОПАСНО</span>':'<span style="background:rgba(16,185,129,.15);color:var(--green);padding:1px 6px;border-radius:4px;font-size:10px;border:1px solid var(--green)">✓ Безопасно</span>'}
-        </div>
-        <div style="font-size:11px;color:var(--text2)">${result.reason}</div>
-        <button onclick="saveCat('${svcName.replace(/'/g,"\\'")}','${result.category}')" style="margin-top:8px;background:${ci.color};border:none;color:#fff;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;font-family:var(--sans)">✓ Применить рекомендацию</button>
-      </div>`;
-    }
-    // Подсвечиваем рекомендованную кнопку
+    const ci = CAT_INFO[result.category]||{label:result.category,color:'#8b5cf6'};
+    const safeHtml = result.safe===false
+      ? '<span style="background:rgba(239,68,68,.2);color:var(--red);padding:1px 6px;border-radius:4px;font-size:10px;border:1px solid var(--red)">⚠️ ОПАСНО</span>'
+      : '<span style="background:rgba(16,185,129,.15);color:var(--green);padding:1px 6px;border-radius:4px;font-size:10px;border:1px solid var(--green)">✓ Безопасно</span>';
+    if(resultEl) resultEl.innerHTML = `<div style="padding:10px;border-radius:8px;background:${ci.color}20;border:1px solid ${ci.color}40">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <strong style="color:${ci.color}">${ci.label}</strong>${safeHtml}
+      </div>
+      <div style="font-size:11px;color:var(--text2);margin-bottom:8px">${result.reason||''}</div>
+      <button onclick="saveCat('${svcName.replace(/'/g,"\\'")}','${result.category}')" style="background:${ci.color};border:none;color:#fff;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;font-family:var(--sans)">✓ Применить рекомендацию</button>
+    </div>`;
     document.querySelectorAll('[id^="cat-btn-"]').forEach(b=>b.style.outline='none');
     const recBtn = document.getElementById('cat-btn-'+result.category);
-    if(recBtn) recBtn.style.outline = '2px solid ' + ci.color;
+    if(recBtn) recBtn.style.outline='2px solid '+ci.color;
   } catch(e) {
-    console.error(e);
-    if(resultEl){
-      const errMsg = e?.message||'Ошибка соединения';
-      resultEl.innerHTML = `<div style="padding:10px;border-radius:8px;background:rgba(239,68,68,.1);border:1px solid var(--red)">
-        <div style="color:var(--red);font-size:12px;margin-bottom:4px">⚠️ AI недоступен</div>
-        <div style="color:var(--text2);font-size:11px">${errMsg}</div>
-        <div style="color:var(--text3);font-size:10px;margin-top:4px">Выберите категорию вручную ниже</div>
-      </div>`;
-    }
+    if(resultEl) resultEl.innerHTML = `<div style="padding:10px;border-radius:8px;background:rgba(239,68,68,.1);border:1px solid var(--red)">
+      <div style="color:var(--red);font-size:12px;margin-bottom:4px">⚠️ AI недоступен</div>
+      <div style="color:var(--text2);font-size:11px">${e.message||'Ошибка'}</div>
+      <div style="color:var(--text3);font-size:10px;margin-top:4px">Выберите категорию вручную ниже</div>
+    </div>`;
   }
   btn.disabled = false;
   btn.innerHTML = '🤖 AI проверка';
