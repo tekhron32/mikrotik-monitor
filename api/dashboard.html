@@ -326,10 +326,11 @@ async function act(dev,h){
         <div class="act-ip">${dev.ip_current} · <span style='font-family:var(--mono)'>${dev.mac_address||''}</span></div>
         <div style='display:flex;align-items:center;gap:6px;margin-top:3px'>
           <span id='dev-traffic-val' style='font-size:10px;color:var(--text2)'>📊 ${devTraffic[dev.ip_current]?.fmt||'—'}</span>
-          <div style='display:flex;gap:2px'>
-            <button onclick="changeDevTraffic(1)" id='dtp-1' class='tbtn' style='font-size:9px;padding:1px 5px'>1д</button>
-            <button onclick="changeDevTraffic(7)" id='dtp-7' class='tbtn on' style='font-size:9px;padding:1px 5px'>7д</button>
-            <button onclick="changeDevTraffic(30)" id='dtp-30' class='tbtn' style='font-size:9px;padding:1px 5px'>30д</button>
+          <div style='display:flex;gap:3px;background:var(--bg4);padding:2px;border-radius:5px'>
+            <button onclick="changeDevTraffic(0.04)" id='dtp-0' style='padding:2px 6px;border-radius:4px;border:none;background:transparent;color:var(--text2);font-size:9px;cursor:pointer;font-family:var(--mono)'>1ч</button>
+            <button onclick="changeDevTraffic(1)" id='dtp-1' style='padding:2px 6px;border-radius:4px;border:none;background:transparent;color:var(--text2);font-size:9px;cursor:pointer;font-family:var(--mono)'>1д</button>
+            <button onclick="changeDevTraffic(7)" id='dtp-7' style='padding:2px 6px;border-radius:4px;border:none;background:var(--accent);color:#fff;font-size:9px;cursor:pointer;font-family:var(--mono);font-weight:600'>7д</button>
+            <button onclick="changeDevTraffic(30)" id='dtp-30' style='padding:2px 6px;border-radius:4px;border:none;background:transparent;color:var(--text2);font-size:9px;cursor:pointer;font-family:var(--mono)'>30д</button>
           </div>
         </div>
       </div>
@@ -671,28 +672,45 @@ async function aiAnalyzeAll(devName, event) {
 }
 
 async function changeDevTraffic(days){
-  document.querySelectorAll('[id^="dtp-"]').forEach(b=>b.classList.remove('on'));
-  const btn=document.getElementById('dtp-'+days);
-  if(btn)btn.classList.add('on');
+  const ids=[0.04,1,7,30];
+  ids.forEach(d=>{
+    const b=document.getElementById('dtp-'+d);
+    if(!b)return;
+    if(d===days){b.style.background='var(--accent)';b.style.color='#fff';b.style.fontWeight='600';}
+    else{b.style.background='transparent';b.style.color='var(--text2)';b.style.fontWeight='400';}
+  });
   if(!selDev)return;
+  const hours=Math.round(days*24);
+  const label=days===0.04?'1ч':days===1?'1д':days===7?'7д':'30д';
   try{
-    const rt=await fetch('/api/reports/device-traffic?hours='+(days*24));
+    const rt=await fetch('/api/reports/device-traffic?hours='+hours);
     const dt=await rt.json();
     const found=(dt.data||[]).find(x=>x.ip===selDev.ip_current);
     const el=document.getElementById('dev-traffic-val');
-    if(el)el.textContent='📊 '+(found?.bytes_fmt||'0 B')+' за '+days+'д';
+    if(el)el.textContent='📊 '+(found?.bytes_fmt||'0 B')+' за '+label;
   }catch(e){}
 }
 
 async function setTrafficPeriod(days){
   trafficHours = days * 24;
-  document.querySelectorAll('[id^="tp-"]').forEach(b=>b.classList.remove('on'));
-  const btn = document.getElementById('tp-'+days);
-  if(btn) btn.classList.add('on');
-  const labels = {1:'за день', 7:'за неделю', 30:'за месяц'};
-  const lbl = document.getElementById('traffic-period-label');
-  if(lbl) lbl.textContent = labels[days]||'за период';
+  // Обновляем стили кнопок
+  [1,7,30,720].forEach(d=>{
+    const b=document.getElementById('tp-'+d);
+    if(!b)return;
+    if(d===days){
+      b.style.background='var(--accent)';b.style.color='#fff';b.style.fontWeight='600';
+    } else {
+      b.style.background='transparent';b.style.color='var(--text2)';b.style.fontWeight='400';
+    }
+  });
   await loadTrafficTop();
+  // Обновляем summary
+  try{
+    const r=await fetch('/api/reports/summary?hours='+(days*24));
+    const d=await r.json();
+    if(d.period_bytes_fmt) document.getElementById('s-bytes').textContent=d.period_bytes_fmt;
+    if(d.period_sessions!==undefined) document.getElementById('s-sess').textContent='сессий: '+d.period_sessions.toLocaleString();
+  }catch(e){}
 }
 
 async function loadTrafficTop(){
