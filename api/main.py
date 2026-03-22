@@ -511,3 +511,21 @@ Categories (apply only if no custom rule matches):
         return {"ok": False, "domain": domain, "error": str(e)}
 
 
+
+@app.get("/api/reports/device-traffic")
+async def device_traffic(hours: int = Query(168)):
+    ch = get_ch()
+    try:
+        rows = ch.execute("""
+            SELECT toString(src_ip) as ip,
+                   sum(bytes_in) as bytes,
+                   formatReadableSize(sum(bytes_in)) as bytes_fmt
+            FROM flows
+            WHERE ts >= now() - INTERVAL %(h)s HOUR
+              AND toUInt32(src_ip) BETWEEN toUInt32(toIPv4('192.168.1.0'))
+                                       AND toUInt32(toIPv4('192.168.1.255'))
+            GROUP BY src_ip ORDER BY bytes DESC LIMIT 50
+        """, {"h": hours})
+        return {"data": [{"ip": r[0], "bytes": r[1], "bytes_fmt": r[2]} for r in rows]}
+    except Exception as e:
+        return {"data": [], "error": str(e)}

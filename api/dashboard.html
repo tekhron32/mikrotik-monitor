@@ -218,6 +218,17 @@ async function loadGlobal(){
     for(const r of rows){byIp[r.ip]=(byIp[r.ip]||0)+r.hits;const s=svc(r.domain);bySvc[s]=(bySvc[s]||0)+r.hits;}
     devDns=byIp;
     document.getElementById('s-dev').textContent=allDevs.filter(d=>devDns[d.ip_current]>0).length||allDevs.filter(isOn).length;
+    // Топ трафика — только наши устройства
+    try{
+      const rt=await fetch('/api/reports/device-traffic?hours=168');
+      const dt=await rt.json();
+      const filtered=(dt.data||[]).filter(x=>allDevs.some(d=>d.ip_current===x.ip));
+      const mx=filtered[0]?.bytes||1;
+      ttRows('tt-traffic',filtered.slice(0,5).map(x=>{
+        const dv=allDevs.find(d=>d.ip_current===x.ip);
+        return{i:di(dv),n:dn(dv),v:x.bytes_fmt,r:x.bytes};
+      }),mx);
+    }catch(e){}
     const ipS=Object.entries(byIp).sort((a,b)=>b[1]-a[1]);
     const svcS=Object.entries(bySvc).sort((a,b)=>b[1]-a[1]);
     ttRows('tt-dns',ipS.map(([ip,c])=>{const dv=allDevs.find(x=>x.ip_current===ip);return{i:dv?di(dv):'💻',n:dv?dn(dv):ip,v:fmtN(c),r:c};}),ipS[0]?.[1]||1);
@@ -233,14 +244,7 @@ async function loadSummary(){
     const r=await fetch('/api/reports/summary');const d=await r.json();
     document.getElementById('s-bytes').textContent=d.period_bytes_fmt||'0 B';
     document.getElementById('s-sess').textContent='сессий: '+(d.period_sessions||0).toLocaleString();
-    // Топ по трафику из device-traffic (точнее чем top-users)
-    const r2=await fetch('/api/reports/device-traffic?hours=168');const d2=await r2.json();
-    const dt=d2.data||[];const mx=dt[0]?.bytes||1;
-    ttRows('tt-traffic',dt.slice(0,5).map(x=>{
-      const dv=allDevs.find(d=>d.ip_current===x.ip);
-      const nm=dv?dn(dv):x.ip;
-      return{i:dv?di(dv):'💻',n:nm,v:x.bytes_fmt,r:x.bytes};
-    }),mx);
+    // traffic loaded in loadGlobal
   }catch(e){}
 }
 
