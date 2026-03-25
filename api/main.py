@@ -546,6 +546,8 @@ async def save_domain_category(body: dict):
     cat = body.get("category", "").strip()
     if not svc or not cat:
         return {"ok": False, "error": "service_name and category required"}
+    # Нормализуем — первая буква заглавная для единообразия
+    svc = svc[0].upper() + svc[1:] if svc else svc
     await pg.execute("""
         INSERT INTO domain_categories (service_name, category, updated_at)
         VALUES ($1, $2, NOW())
