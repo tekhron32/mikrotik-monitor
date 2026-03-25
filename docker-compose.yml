@@ -100,6 +100,9 @@ services:
       REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY:-change_me_in_production}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      MIKROTIK_HOST: ${MIKROTIK_HOST:-192.168.1.200}
+      MIKROTIK_USER: ${MIKROTIK_USER:-nebulanet}
+      MIKROTIK_PASS: ${MIKROTIK_PASS:-Nebula2026!}
       LOG_LEVEL: INFO
     depends_on:
       clickhouse: {condition: service_healthy}

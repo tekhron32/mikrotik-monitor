@@ -562,3 +562,192 @@ async def delete_domain_category(service_name: str):
     pg = await get_pg()
     await pg.execute("DELETE FROM domain_categories WHERE service_name=$1", service_name)
     return {"ok": True}
+
+# ─── MikroTik Integration ─────────────────────────────────────────
+import os as _os_mt
+
+def get_mikrotik():
+    import librouteros
+    return librouteros.connect(
+        host=_os_mt.getenv('MIKROTIK_HOST','192.168.1.200'),
+        username=_os_mt.getenv('MIKROTIK_USER','nebulanet'),
+        password=_os_mt.getenv('MIKROTIK_PASS','Nebula2026!'),
+        port=8728
+    )
+
+async def ensure_block_tables(pg):
+    await pg.execute("""
+        CREATE TABLE IF NOT EXISTS blocked_domains (
+            id SERIAL PRIMARY KEY,
+            domain VARCHAR(255) NOT NULL,
+            department VARCHAR(255) NOT NULL DEFAULT 'all',
+            comment TEXT,
+            blocked_at TIMESTAMP DEFAULT NOW(),
+            is_active BOOLEAN DEFAULT TRUE,
+            UNIQUE(domain, department)
+        )
+    """)
+    await pg.execute("""
+        CREATE TABLE IF NOT EXISTS departments (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL UNIQUE,
+            address_list VARCHAR(255) NOT NULL UNIQUE,
+            description TEXT,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+# ─── Departments ──────────────────────────────────────────────────
+@app.get("/api/departments")
+async def get_departments():
+    """Список отделов (address-lists из MikroTik)"""
+    try:
+        mt = get_mikrotik()
+        al = list(mt(cmd='/ip/firewall/address-list/print'))
+        mt.close()
+        # Группируем по списку
+        lists = {}
+        for e in al:
+            name = e.get('list','')
+            if name in ('block','local-nets','steam_block','udp2raw','frankfurt','frankfurt-ovpn','usa','Monitor185'):
+                continue  # пропускаем системные
+            if name not in lists:
+                lists[name] = []
+            lists[name].append(e.get('address',''))
+        return {"data": [{"name": k, "address_list": k, "members": v} for k,v in lists.items()]}
+    except Exception as e:
+        return {"data": [], "error": str(e)}
+
+@app.post("/api/departments")
+async def create_department(body: dict):
+    """Создать отдел — добавить IP в address-list"""
+    name = body.get("name","").strip()
+    ip = body.get("ip","").strip()
+    comment = body.get("comment","")
+    if not name or not ip:
+        return {"ok": False, "error": "name and ip required"}
+    try:
+        mt = get_mikrotik()
+        list(mt(cmd='/ip/firewall/address-list/add', **{
+            'list': name,
+            'address': ip,
+            'comment': comment or f'NebulaNet: {name}'
+        }))
+        mt.close()
+        return {"ok": True, "department": name, "ip": ip}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@app.delete("/api/departments/{dept_name}/members/{ip}")
+async def remove_from_department(dept_name: str, ip: str):
+    """Удалить IP из отдела"""
+    try:
+        mt = get_mikrotik()
+        entries = list(mt(cmd='/ip/firewall/address-list/print'))
+        for e in entries:
+            if e.get('list') == dept_name and e.get('address') == ip:
+                list(mt(cmd='/ip/firewall/address-list/remove', **{'.id': e['.id']}))
+        mt.close()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+# ─── Block rules ──────────────────────────────────────────────────
+@app.get("/api/block/list")
+async def get_block_list():
+    """Список блокировок из MikroTik address-list block"""
+    try:
+        mt = get_mikrotik()
+        entries = list(mt(cmd='/ip/firewall/address-list/print'))
+        mt.close()
+        blocked = [e for e in entries if e.get('list') == 'block']
+        # Также получаем правила фильтра
+        pg = await get_pg()
+        await ensure_block_tables(pg)
+        db_rows = await pg.fetch("SELECT * FROM blocked_domains WHERE is_active=TRUE ORDER BY blocked_at DESC")
+        return {
+            "mt_blocked": [{"address": e.get('address'), "comment": e.get('comment','')} for e in blocked],
+            "rules": [dict(r) for r in db_rows]
+        }
+    except Exception as e:
+        return {"mt_blocked": [], "rules": [], "error": str(e)}
+
+@app.post("/api/block/domain")
+async def block_domain(body: dict):
+    """Заблокировать домен для отдела через MikroTik"""
+    domain = body.get("domain","").strip()
+    department = body.get("department","all").strip()  # src-address-list
+    comment = body.get("comment", f"NebulaNet: {domain}")
+    if not domain:
+        return {"ok": False, "error": "domain required"}
+    try:
+        mt = get_mikrotik()
+        # 1. Добавляем домен в address-list 'block'
+        try:
+            list(mt(cmd='/ip/firewall/address-list/add', **{
+                'list': 'block',
+                'address': domain,
+                'comment': comment
+            }))
+        except Exception:
+            pass  # уже существует
+
+        # 2. Создаём правило filter если нужно для конкретного отдела
+        if department and department != 'all':
+            # Проверяем не существует ли уже правило
+            rules = list(mt(cmd='/ip/firewall/filter/print'))
+            rule_exists = any(
+                r.get('src-address-list') == department and
+                r.get('dst-address-list') == 'block' and
+                r.get('chain') == 'forward'
+                for r in rules
+            )
+            if not rule_exists:
+                list(mt(cmd='/ip/firewall/filter/add', **{
+                    'chain': 'forward',
+                    'src-address-list': department,
+                    'dst-address-list': 'block',
+                    'action': 'reject',
+                    'reject-with': 'icmp-network-unreachable',
+                    'comment': f'NebulaNet: block for {department}'
+                }))
+                log.info("Created filter rule for department: %s", department)
+
+        mt.close()
+
+        # 3. Сохраняем в БД
+        pg = await get_pg()
+        await ensure_block_tables(pg)
+        await pg.execute("""
+            INSERT INTO blocked_domains (domain, department, comment)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (domain, department) DO UPDATE
+            SET is_active=TRUE, comment=EXCLUDED.comment, blocked_at=NOW()
+        """, domain, department, comment)
+
+        return {"ok": True, "domain": domain, "department": department}
+    except Exception as e:
+        log.error("block_domain error: %s", e)
+        return {"ok": False, "error": str(e)}
+
+@app.post("/api/block/unblock")
+async def unblock_domain(body: dict):
+    """Разблокировать домен"""
+    domain = body.get("domain","").strip()
+    if not domain:
+        return {"ok": False, "error": "domain required"}
+    try:
+        mt = get_mikrotik()
+        entries = list(mt(cmd='/ip/firewall/address-list/print'))
+        removed = 0
+        for e in entries:
+            if e.get('list') == 'block' and e.get('address') == domain:
+                list(mt(cmd='/ip/firewall/address-list/remove', **{'.id': e['.id']}))
+                removed += 1
+        mt.close()
+        pg = await get_pg()
+        await ensure_block_tables(pg)
+        await pg.execute("UPDATE blocked_domains SET is_active=FALSE WHERE domain=$1", domain)
+        return {"ok": True, "removed": removed}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
