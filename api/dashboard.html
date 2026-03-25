@@ -199,6 +199,18 @@ function fmtN(n){return n>=1000?(n/1000).toFixed(1)+'k':String(n);}
 let selDev=null,allDevs=[],hours=24,devDns={},devTraffic={},typeFilter='all',catFilter=null,devRows=[],globalDns=[],trafficHours=168;
 let names=JSON.parse(localStorage.getItem('nb_names')||'{}');
 let customCats=JSON.parse(localStorage.getItem('nb_cats')||'{}');
+
+async function loadCatsFromDB(){
+  try{
+    const r=await fetch('/api/domain-categories');
+    const d=await r.json();
+    const dbCats=d.data||{};
+    // Мержим: БД имеет приоритет над localStorage
+    customCats={...customCats,...dbCats};
+    localStorage.setItem('nb_cats',JSON.stringify(customCats));
+    console.log('Loaded',Object.keys(dbCats).length,'categories from DB');
+  }catch(e){console.error('loadCatsFromDB:',e);}
+}
 const CAT_DEF={'Facebook':'social','Instagram':'social','Telegram':'social','VK':'social','Twitter/X':'social','TikTok':'social','WhatsApp':'social','Reddit':'social','YouTube':'entertainment','Netflix':'entertainment','Spotify':'entertainment','Twitch':'entertainment','TradingView':'work','Google':'work','Gmail':'work','Microsoft':'work','Microsoft Office':'work','Outlook':'work','Zoom':'work','Slack':'work','RingCentral':'work','Uzbfreight':'work','DriveHOS':'work','Datatruck':'work','Alvys':'work','Steam':'gaming','Epic Games':'gaming','Roblox':'gaming','Windows Update':'system','Cloudflare DNS':'system','NTP':'system','Apple':'system','Google Services':'system','Cloudflare':'system','GDMS':'system','McAfee':'system','Google DNS':'system'};
 const CAT_INFO={work:{label:'💼 Работа',color:'#10b981'},social:{label:'👥 Соцсети',color:'#3b82f6'},entertainment:{label:'🎬 Развлечения',color:'#f97316'},gaming:{label:'🎮 Игры',color:'#ec4899'},system:{label:'⚙️ Система',color:'#6b7280'},other:{label:'🌐 Другое',color:'#8b5cf6'}};
 function getCat(s){return customCats[s]||CAT_DEF[s]||'other';}
@@ -430,8 +442,31 @@ function openCatEdit(svcName,currentCat){
     </div></div>`;
   document.body.appendChild(bg);
 }
-function saveCat(svcName,newCat){customCats[svcName]=newCat;localStorage.setItem('nb_cats',JSON.stringify(customCats));document.getElementById('cat-modal')?.remove();toast('✓ '+svcName+' → '+(CAT_INFO[newCat]?.label||newCat));if(selDev)act(selDev,hours);}
-function resetCat(svcName){delete customCats[svcName];localStorage.setItem('nb_cats',JSON.stringify(customCats));toast('↺ Сброс: '+svcName);if(selDev)act(selDev,hours);}
+async function saveCat(svcName,newCat){
+  customCats[svcName]=newCat;
+  localStorage.setItem('nb_cats',JSON.stringify(customCats));
+  document.getElementById('cat-modal')?.remove();
+  toast('✓ '+svcName+' → '+(CAT_INFO[newCat]?.label||newCat));
+  // Сохраняем в БД
+  try{
+    await fetch('/api/domain-categories',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({service_name:svcName,category:newCat})
+    });
+  }catch(e){console.error('saveCat DB error:',e);}
+  if(selDev)act(selDev,hours);
+}
+async function resetCat(svcName){
+  delete customCats[svcName];
+  localStorage.setItem('nb_cats',JSON.stringify(customCats));
+  toast('↺ Сброс: '+svcName);
+  // Удаляем из БД
+  try{
+    await fetch('/api/domain-categories/'+encodeURIComponent(svcName),{method:'DELETE'});
+  }catch(e){console.error('resetCat DB error:',e);}
+  if(selDev)act(selDev,hours);
+}
 async function openDomainMenu(domain,svcName,currentCat){
   document.getElementById('du-modal')?.remove();
   const bg=document.createElement('div');bg.className='modal-bg';bg.id='du-modal';
@@ -667,8 +702,13 @@ async function aiAnalyzeAll(devName, event) {
     await new Promise(r=>setTimeout(r,300)); // пауза между батчами
   }
 
-  // Сохраняем все
+  // Сохраняем все в localStorage и БД
   localStorage.setItem('nb_cats', JSON.stringify(customCats));
+  // Batch сохранение в БД
+  const saves=Object.entries(customCats).map(([s,c])=>
+    fetch('/api/domain-categories',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service_name:s,category:c})})
+  );
+  try{await Promise.all(saves);}catch(e){console.error('batch save error:',e);}
   progressBar.style.width = '100%';
   btn.innerHTML = '🤖 AI анализ';
   btn.disabled = false;
@@ -741,6 +781,7 @@ async function loadTrafficTop(){
 }
 
 async function loadAll(){
+  await loadCatsFromDB();
   await Promise.all([loadSummary(),loadDevices()]);
   await loadGlobal();
   if(selDev)act(selDev,hours);

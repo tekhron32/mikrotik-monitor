@@ -529,3 +529,34 @@ async def device_traffic(hours: int = Query(168)):
         return {"data": [{"ip": r[0], "bytes": r[1], "bytes_fmt": r[2]} for r in rows]}
     except Exception as e:
         return {"data": [], "error": str(e)}
+
+# ─── Domain Categories (persistent) ──────────────────────────────
+@app.get("/api/domain-categories")
+async def get_domain_categories():
+    """Получить все кастомные категории из БД"""
+    pg = await get_pg()
+    rows = await pg.fetch("SELECT service_name, category FROM domain_categories")
+    return {"data": {r["service_name"]: r["category"] for r in rows}}
+
+@app.post("/api/domain-categories")
+async def save_domain_category(body: dict):
+    """Сохранить категорию домена в БД"""
+    pg = await get_pg()
+    svc = body.get("service_name", "").strip()
+    cat = body.get("category", "").strip()
+    if not svc or not cat:
+        return {"ok": False, "error": "service_name and category required"}
+    await pg.execute("""
+        INSERT INTO domain_categories (service_name, category, updated_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (service_name) DO UPDATE
+        SET category = EXCLUDED.category, updated_at = NOW()
+    """, svc, cat)
+    return {"ok": True}
+
+@app.delete("/api/domain-categories/{service_name}")
+async def delete_domain_category(service_name: str):
+    """Удалить кастомную категорию (сброс к дефолту)"""
+    pg = await get_pg()
+    await pg.execute("DELETE FROM domain_categories WHERE service_name=$1", service_name)
+    return {"ok": True}
