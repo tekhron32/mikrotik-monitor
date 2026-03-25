@@ -661,16 +661,38 @@ async def get_block_list():
         entries = list(mt(cmd='/ip/firewall/address-list/print'))
         mt.close()
         blocked = [e for e in entries if e.get('list') == 'block']
-        # Также получаем правила фильтра
         pg = await get_pg()
         await ensure_block_tables(pg)
         db_rows = await pg.fetch("SELECT * FROM blocked_domains WHERE is_active=TRUE ORDER BY blocked_at DESC")
         return {
-            "mt_blocked": [{"address": e.get('address'), "comment": e.get('comment','')} for e in blocked],
+            "mt_blocked": [{
+                "id": e.get('.id'),
+                "address": e.get('address'),
+                "comment": e.get('comment',''),
+                "disabled": e.get('disabled', False)
+            } for e in blocked],
             "rules": [dict(r) for r in db_rows]
         }
     except Exception as e:
         return {"mt_blocked": [], "rules": [], "error": str(e)}
+
+@app.post("/api/block/toggle")
+async def toggle_block(body: dict):
+    """Включить/выключить запись в block list"""
+    entry_id = body.get("id","").strip()
+    disabled = body.get("disabled", False)
+    if not entry_id:
+        return {"ok": False, "error": "id required"}
+    try:
+        mt = get_mikrotik()
+        if disabled:
+            list(mt(cmd='/ip/firewall/address-list/disable', **{'.id': entry_id}))
+        else:
+            list(mt(cmd='/ip/firewall/address-list/enable', **{'.id': entry_id}))
+        mt.close()
+        return {"ok": True, "id": entry_id, "disabled": disabled}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 @app.post("/api/block/domain")
 async def block_domain(body: dict):
@@ -682,15 +704,23 @@ async def block_domain(body: dict):
         return {"ok": False, "error": "domain required"}
     try:
         mt = get_mikrotik()
-        # 1. Добавляем домен в address-list 'block'
-        try:
-            list(mt(cmd='/ip/firewall/address-list/add', **{
-                'list': 'block',
-                'address': domain,
-                'comment': comment
-            }))
-        except Exception:
-            pass  # уже существует
+        # 1. Добавляем домен в address-list 'block' (с wildcard поддержкой)
+        # Если домен начинается с * — это wildcard, добавляем как regexp
+        domains_to_add = [domain]
+        if not domain.startswith('*') and not domain.startswith('/'):
+            # Автоматически добавляем wildcard субдоменов
+            wildcard = '*.' + domain.lstrip('*').lstrip('.')
+            domains_to_add.append(wildcard)
+
+        for d in domains_to_add:
+            try:
+                list(mt(cmd='/ip/firewall/address-list/add', **{
+                    'list': 'block',
+                    'address': d,
+                    'comment': comment
+                }))
+            except Exception:
+                pass  # уже существует
 
         # 2. Создаём правило filter если нужно для конкретного отдела
         if department and department != 'all':
