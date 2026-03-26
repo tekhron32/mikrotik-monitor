@@ -703,12 +703,15 @@ async def delete_dns_block(entry_id: str):
 # ─── Block rules ───────────────────────────────────────────────────
 @app.get("/api/block/list")
 async def get_block_list():
-    """Список блокировок из MikroTik address-list block"""
+    """Список блокировок — address-list + SNI rules"""
     try:
         mt = get_mikrotik()
         entries = list(mt(cmd='/ip/firewall/address-list/print'))
+        filter_rules = list(mt(cmd='/ip/firewall/filter/print'))
         mt.close()
         blocked = [e for e in entries if e.get('list') == 'block']
+        # SNI правила созданные нами
+        sni_rules = [r for r in filter_rules if 'NebulaNet-SNI:' in str(r.get('comment',''))]
         pg = await get_pg()
         await ensure_block_tables(pg)
         db_rows = await pg.fetch("SELECT * FROM blocked_domains WHERE is_active=TRUE ORDER BY blocked_at DESC")
@@ -719,14 +722,22 @@ async def get_block_list():
                 "comment": e.get('comment',''),
                 "disabled": e.get('disabled', False)
             } for e in blocked],
+            "sni_rules": [{
+                "id": r.get('.id'),
+                "tls_host": r.get('tls-host',''),
+                "src_list": r.get('src-address-list','all'),
+                "action": r.get('action',''),
+                "comment": r.get('comment',''),
+                "disabled": r.get('disabled', False)
+            } for r in sni_rules],
             "rules": [dict(r) for r in db_rows]
         }
     except Exception as e:
-        return {"mt_blocked": [], "rules": [], "error": str(e)}
+        return {"mt_blocked": [], "sni_rules": [], "rules": [], "error": str(e)}
 
 @app.post("/api/block/toggle")
 async def toggle_block(body: dict):
-    """Включить/выключить запись в block list + DNS regexp"""
+    """Включить/выключить address-list запись + SNI правило"""
     entry_id = body.get("id","").strip()
     disabled = body.get("disabled", False)
     domain = body.get("domain","").strip()
@@ -739,25 +750,43 @@ async def toggle_block(body: dict):
             list(mt(cmd='/ip/firewall/address-list/disable', **{'.id': entry_id}))
         else:
             list(mt(cmd='/ip/firewall/address-list/enable', **{'.id': entry_id}))
-        # Toggle DNS regexp тоже
+        # Toggle SNI правила для этого домена
         if domain:
-            dns_entries = list(mt(cmd='/ip/dns/static/print'))
-            for e in dns_entries:
-                if f'NebulaNet: {domain}' in str(e.get('comment','')):
+            filter_rules = list(mt(cmd='/ip/firewall/filter/print'))
+            for r in filter_rules:
+                if f'NebulaNet-SNI: {domain}' in str(r.get('comment','')) or                    f'NebulaNet-HTTP: {domain}' in str(r.get('comment','')):
                     if disabled:
-                        list(mt(cmd='/ip/dns/static/disable', **{'.id': e['.id']}))
+                        list(mt(cmd='/ip/firewall/filter/disable', **{'.id': r['.id']}))
                     else:
-                        list(mt(cmd='/ip/dns/static/enable', **{'.id': e['.id']}))
+                        list(mt(cmd='/ip/firewall/filter/enable', **{'.id': r['.id']}))
         mt.close()
         return {"ok": True, "id": entry_id, "disabled": disabled}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+@app.post("/api/block/sni-toggle")
+async def toggle_sni(body: dict):
+    """Включить/выключить SNI правило"""
+    entry_id = body.get("id","").strip()
+    disabled = body.get("disabled", False)
+    if not entry_id:
+        return {"ok": False, "error": "id required"}
+    try:
+        mt = get_mikrotik()
+        if disabled:
+            list(mt(cmd='/ip/firewall/filter/disable', **{'.id': entry_id}))
+        else:
+            list(mt(cmd='/ip/firewall/filter/enable', **{'.id': entry_id}))
+        mt.close()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 @app.post("/api/block/domain")
 async def block_domain(body: dict):
-    """Заблокировать домен для отдела через MikroTik"""
+    """Добавить домен в block list + создать правило для отдела"""
     domain = body.get("domain","").strip()
-    department = body.get("department","all").strip()  # src-address-list
+    department = body.get("department","").strip()
     comment = body.get("comment", f"NebulaNet: {domain}")
     if not domain:
         return {"ok": False, "error": "domain required"}
@@ -773,42 +802,30 @@ async def block_domain(body: dict):
         except Exception:
             pass  # уже существует
 
-        # 2. Добавляем DNS static regexp для блокировки всех субдоменов
-        # Это блокирует www.youtube.com, music.youtube.com и т.д.
-        import re as _re
-        # Экранируем точки в домене для regexp
-        escaped = _re.escape(domain)
-        # Regexp: совпадает с доменом И всеми субдоменами
-        regexp = f'.*\\.{escaped}|^{escaped}$'
-        try:
-            list(mt(cmd='/ip/dns/static/add', **{
-                'regexp': regexp,
-                'address': '127.0.0.1',
-                'comment': f'NebulaNet: {domain}'
-            }))
-            log.info("DNS regexp added for %s", domain)
-        except Exception as e:
-            log.warning("DNS regexp error for %s: %s", domain, e)
-
-        # 2. Создаём правило filter если нужно для конкретного отдела
+        # 2. Если указан отдел — создаём правило если его нет
         if department and department != 'all':
-            # Проверяем не существует ли уже правило
             rules = list(mt(cmd='/ip/firewall/filter/print'))
             rule_exists = any(
                 r.get('src-address-list') == department and
                 r.get('dst-address-list') == 'block' and
-                r.get('chain') == 'forward'
+                r.get('chain') == 'forward' and
+                not r.get('disabled')
                 for r in rules
             )
             if not rule_exists:
-                list(mt(cmd='/ip/firewall/filter/add', **{
+                # Ставим правило перед первым accept all
+                accept_all = next((r for r in rules if r.get('chain')=='forward' and r.get('action')=='accept' and not r.get('src-address-list') and not r.get('dst-address-list') and not r.get('disabled')), None)
+                kwargs = {
                     'chain': 'forward',
                     'src-address-list': department,
                     'dst-address-list': 'block',
                     'action': 'reject',
                     'reject-with': 'icmp-network-unreachable',
                     'comment': f'NebulaNet: block for {department}'
-                }))
+                }
+                if accept_all:
+                    kwargs['place-before'] = accept_all['.id']
+                list(mt(cmd='/ip/firewall/filter/add', **kwargs))
                 log.info("Created filter rule for department: %s", department)
 
         mt.close()
@@ -821,34 +838,28 @@ async def block_domain(body: dict):
             VALUES ($1, $2, $3)
             ON CONFLICT (domain, department) DO UPDATE
             SET is_active=TRUE, comment=EXCLUDED.comment, blocked_at=NOW()
-        """, domain, department, comment)
+        """, domain, department or 'all', comment)
 
         return {"ok": True, "domain": domain, "department": department}
     except Exception as e:
         log.error("block_domain error: %s", e)
         return {"ok": False, "error": str(e)}
 
+
 @app.post("/api/block/unblock")
 async def unblock_domain(body: dict):
-    """Разблокировать домен — удаляем из address-list и DNS regexp"""
+    """Удалить домен из block list"""
     domain = body.get("domain","").strip()
     if not domain:
         return {"ok": False, "error": "domain required"}
     try:
         mt = get_mikrotik()
-        # Удаляем из address-list block
         entries = list(mt(cmd='/ip/firewall/address-list/print'))
         removed = 0
         for e in entries:
             if e.get('list') == 'block' and e.get('address') == domain:
                 list(mt(cmd='/ip/firewall/address-list/remove', **{'.id': e['.id']}))
                 removed += 1
-        # Удаляем DNS static regexp
-        dns_entries = list(mt(cmd='/ip/dns/static/print'))
-        for e in dns_entries:
-            if f'NebulaNet: {domain}' in str(e.get('comment','')):
-                list(mt(cmd='/ip/dns/static/remove', **{'.id': e['.id']}))
-                log.info("Removed DNS regexp for %s", domain)
         mt.close()
         pg = await get_pg()
         await ensure_block_tables(pg)
