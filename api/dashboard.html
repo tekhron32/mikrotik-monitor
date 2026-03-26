@@ -227,7 +227,7 @@ function cat(s){return CATS[s]||'other';}
 function bc(s){return BARCOLS[cat(s)];}
 function fmtN(n){return n>=1000?(n/1000).toFixed(1)+'k':String(n);}
 
-let selDev=null,allDevs=[],hours=24,devDns={},devTraffic={},devCatsCache={},typeFilter='all',catFilter=null,devRows=[],globalDns=[],trafficHours=168;
+let selDev=null,allDevs=[],hours=24,devDns={},devTraffic={},devCatsCache={},devCatsAll={},typeFilter='all',catFilter=null,devRows=[],globalDns=[],trafficHours=168,catTimeHours=24;
 let names=JSON.parse(localStorage.getItem('nb_names')||'{}');
 let customCats=JSON.parse(localStorage.getItem('nb_cats')||'{}');
 
@@ -328,14 +328,23 @@ function renderDevs(){
     const mid=d.mac_address.replace(/:/g,'');
     const dc=devDns[d.ip_current]||0;
     const dcls=dc>200?'high':dc>50?'med':'';
-    // Категории: сначала из globalDns (1ч), если нет — из кэша за 24ч
-    const devDnsRows=globalDns.filter(r=>r.ip===d.ip_current);
+    // Категории по выбранному времени
     const devCats={};
-    if(devDnsRows.length>0){
-      devDnsRows.forEach(r=>{const c=getCat(svc(r.domain));devCats[c]=(devCats[c]||0)+r.hits;});
-    } else if(devCatsCache[d.ip_current]){
-      // Используем данные за 24ч
-      devCatsCache[d.ip_current].forEach(r=>{const c=getCat(svc(r.domain));devCats[c]=(devCats[c]||0)+r.hits;});
+    if(catTimeHours===1){
+      // 1 час — из globalDns
+      globalDns.filter(r=>r.ip===d.ip_current).forEach(r=>{
+        const c=getCat(svc(r.domain));devCats[c]=(devCats[c]||0)+r.hits;
+      });
+    } else if(catTimeHours===0){
+      // Всё время
+      (devCatsAll[d.ip_current]||[]).forEach(r=>{
+        const c=getCat(svc(r.domain));devCats[c]=(devCats[c]||0)+r.hits;
+      });
+    } else {
+      // 24ч из кэша
+      (devCatsCache[d.ip_current]||[]).forEach(r=>{
+        const c=getCat(svc(r.domain));devCats[c]=(devCats[c]||0)+r.hits;
+      });
     }
     const devTotal=Object.values(devCats).reduce((s,v)=>s+v,0)||1;
     const CAT_ORDER_D=['work','social','entertainment','gaming','system','other'];
@@ -399,7 +408,7 @@ async function act(dev,h){
       </div>
       <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
         <button onclick="aiAnalyzeAll('${nm.replace(/'/g,"\\'")}',event)" style="background:rgba(139,92,246,.15);border:1px solid var(--purple);color:var(--purple);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px;font-family:var(--sans);display:flex;align-items:center;gap:5px" title="AI проверит все домены и назначит категории">🤖 AI анализ</button>
-        <div class="time-filter">${[1,4,24,168].map(x=>`<button class="time-btn${x===h?' active':''}" onclick="chH(${x})">${x===168?'7д':x+'ч'}</button>`).join('')}</div>
+        <div class="time-filter">${[1,4,24,168,0].map(x=>`<button class="time-btn${x===h?' active':''}" onclick="chH(${x})">${x===168?'7д':x===0?'Всё':x+'ч'}</button>`).join('')}</div>
       </div>
     </div>
     <div class="loading"><div class="spinner"></div>Загрузка...</div>`;
@@ -446,7 +455,7 @@ async function act(dev,h){
   }catch(e){console.error(e);}
 }
 
-function chH(h){hours=h;if(selDev)act(selDev,h);}
+function chH(h){hours=h;if(selDev)act(selDev,h===0?8760:h);}
 
 function toggleCat(btn,cat){
   const isOn=btn.classList.contains('on');
@@ -780,6 +789,27 @@ async function changeDevTraffic(days, id){
     const el=document.getElementById('dev-traffic-val');
     if(el)el.textContent='📊 '+(found?.bytes_fmt||'0 B')+' за '+label;
   }catch(e){}
+}
+
+async function setCatTime(h, btn){
+  catTimeHours = h;
+  document.querySelectorAll('[onclick^="setCatTime"]').forEach(b=>{
+    b.style.background='transparent';b.style.color='var(--text2)';b.style.fontWeight='400';
+  });
+  btn.style.background='var(--accent)';btn.style.color='#fff';btn.style.fontWeight='700';
+  // Загружаем данные за нужный период
+  if(h===1){
+    // Используем globalDns
+  } else {
+    try{
+      const hours_param = h===0 ? 8760 : h; // 0 = всё время = 1 год
+      const rc = await fetch('/api/reports/device-categories?hours='+hours_param);
+      const dc = await rc.json();
+      if(h===0) devCatsAll = dc.data||{};
+      else devCatsCache = dc.data||{};
+    }catch(e){console.error(e);}
+  }
+  renderDevs();
 }
 
 async function setTrafficPeriod(days, id){
