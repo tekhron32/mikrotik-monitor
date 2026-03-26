@@ -393,9 +393,15 @@ async function save(mac,ip,name){
   if(dv&&!dv.user_id){try{const r=await fetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:name.toLowerCase().replace(/\s+/g,'_').replace(/[^a-z0-9_]/g,'x'),full_name:name})});const u=await r.json();if(u.id)await fetch('/api/devices/'+mac+'/assign',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:u.id})});}catch(e){}}
 }
 
-async function sel(dev){selDev=dev;renderDevs();await act(dev,hours);}
+async function sel(dev){
+  selDev=dev;
+  renderDevs();
+  // Используем текущий выбранный период
+  const h = hours===0 ? 8760 : hours;
+  await act(dev, h);
+}
 
-async function act(dev,h){
+async function act(dev,h,keepFilters=false){
   const sec=document.getElementById('act-section');
   const nm=dn(dev),ic=di(dev);
   sec.innerHTML=`<div class="sec-hdr"><div class="sec-title">Активность</div><div class="badge" id="act-count">—</div></div>
@@ -425,7 +431,8 @@ async function act(dev,h){
     const d=await r.json();const rows=d.data||[];
     const total=rows.reduce((s,x)=>s+x.hits,0);
     document.getElementById('act-count').textContent=total+' запросов';
-    devRows=rows; catFilter=null;
+    devRows=rows;
+    catFilter = savedCatFilter; // восстанавливаем если keepFilters
     const catTotals={};
     rows.forEach(row=>{const c=getCat(svc(row.domain));catTotals[c]=(catTotals[c]||0)+row.hits;});
     const catBarEl=document.createElement('div');
@@ -460,13 +467,24 @@ async function act(dev,h){
       </div>`;
     }).join('');
     sec.querySelector('.loading').replaceWith(list);
+    // Восстанавливаем catFilter если был выбран
+    if(savedCatFilter){
+      catFilter = savedCatFilter;
+      const pills = document.querySelectorAll('.cat-pill');
+      pills.forEach(p=>{
+        if(p.getAttribute('onclick')?.includes("'"+savedCatFilter+"'")){
+          p.classList.add('on');
+        }
+      });
+      toggleCat(null, savedCatFilter, true);
+    }
   }catch(e){console.error(e);}
 }
 
 function chH(h){hours=h;if(selDev)act(selDev,h===0?8760:h);}
 
-function toggleCat(btn,cat){
-  const isOn=btn.classList.contains('on');
+function toggleCat(btn,cat,fromRestore=false){
+  const isOn=fromRestore?false:btn?.classList.contains('on');
   document.querySelectorAll('.cat-pill').forEach(b=>b.classList.remove('on'));
   catFilter=isOn?null:cat; if(!isOn)btn.classList.add('on');
   const list=document.querySelector('.domain-list'); if(!list||!devRows.length)return;
@@ -864,7 +882,11 @@ async function loadAll(){
   await loadCatsFromDB();
   await Promise.all([loadSummary(),loadDevices()]);
   await loadGlobal();
-  if(selDev)act(selDev,hours);
+  // При автообновлении — обновляем активность но сохраняем фильтры
+  if(selDev){
+    const h = hours===0 ? 8760 : hours;
+    await act(selDev, h, true); // true = keep filters
+  }
 }
 loadAll();setInterval(loadAll,60000);
 
