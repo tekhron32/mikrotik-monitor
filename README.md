@@ -1,95 +1,217 @@
-# NebulaNet — Traffic Monitoring Stack
+# NebulaNet Monitor v1.0
 
-## Quick Start
+Система мониторинга сети на базе MikroTik с AI-анализом доменов.
 
+## Стек
+- **Backend**: FastAPI + Python
+- **Frontend**: Vanilla JS (Single HTML)
+- **БД**: PostgreSQL + ClickHouse + Redis
+- **Инфра**: Docker Compose
+- **Router**: MikroTik RouterOS 7.x
+
+## Архитектура
+```
+MikroTik (192.168.1.200)
+  ├── NetFlow v9 → :2055/udp
+  └── Syslog DNS → :514/udp
+          ↓
+    Collector (Python)
+          ↓
+  ClickHouse (flows, dns_log)
+  PostgreSQL (devices, users, categories, blocks)
+          ↓
+    FastAPI → Dashboard (port 8000)
+```
+
+## Быстрый старт
+
+### 1. Клонирование
 ```bash
-# 1. Clone / copy files to your server
-git clone ... && cd nebulanet
-
-# 2. Run setup
-./scripts/setup.sh
-
-# 3. Open API docs
-http://YOUR_SERVER_IP:8000/docs
+git clone git@github.com:boykulov/mikrotik-monitor.git
+cd mikrotik-monitor
 ```
 
-## Services & Ports
-
-| Service    | Port          | Purpose                     |
-|------------|---------------|-----------------------------|
-| API        | 8000 TCP      | REST API + Swagger UI        |
-| Collector  | 2055 UDP      | NetFlow v9 from MikroTik     |
-| Collector  | 514 UDP       | Syslog (DNS + DHCP)          |
-| ClickHouse | 8123/9000 TCP | Analytics DB (internal)      |
-| PostgreSQL | 5432 TCP      | Metadata DB (internal)       |
-| Redis      | 6379 TCP      | Cache / IP→User (internal)   |
-
-## MikroTik Setup
-
-1. Open `scripts/mikrotik_config.rsc`
-2. Replace `COLLECTOR_IP` with your server IP
-3. Paste into MikroTik Terminal or run via SSH:
-   ```
-   ssh admin@MIKROTIK_IP "/import mikrotik_config.rsc"
-   ```
-
-## API Endpoints
-
-| Method | Path                          | Description                  |
-|--------|-------------------------------|------------------------------|
-| GET    | /health                       | Health check                 |
-| GET    | /reports/top-users            | Top users by traffic         |
-| GET    | /reports/top-domains          | Top visited domains          |
-| GET    | /reports/user/{id}/domains    | User → domains detail        |
-| GET    | /reports/hourly               | Hourly traffic chart         |
-| GET    | /reports/live                 | Live stats (last 5 min)      |
-| GET    | /devices                      | All registered devices       |
-| POST   | /devices/assign               | Assign device to user        |
-| GET    | /users                        | List users                   |
-| POST   | /users                        | Create user                  |
-
-### Query parameters (all reports)
-- `date_from` — YYYY-MM-DD (default: 7 days ago)
-- `date_to`   — YYYY-MM-DD (default: today)
-- `location_id` — int (default: 1)
-
-## How IP → User mapping works
-
-```
-MikroTik DHCP syslog → Collector → Redis (ip→user_id, TTL 24h)
-                                 → PostgreSQL dhcp_leases table
-
-NetFlow (src_ip) → Redis lookup → user_id attached to every flow
-```
-
-## Register users
-
-After setup, register users so IPs get proper names in reports:
-
+### 2. Настройка .env
 ```bash
-# Create a user
-curl -X POST http://SERVER:8000/users \
-  -H "Content-Type: application/json" \
-  -d '{"username":"ivan","full_name":"Ivan Petrov","department":"IT"}'
-
-# Assign a device (MAC) to user
-curl -X POST http://SERVER:8000/devices/assign \
-  -H "Content-Type: application/json" \
-  -d '{"mac_address":"aa:bb:cc:dd:ee:ff","user_id":1}'
+cp .env.example .env
+nano .env
 ```
 
-## Logs
+Заполни:
+```env
+POSTGRES_PASSWORD=your_password
+CLICKHOUSE_PASSWORD=your_password
+ADMIN_PASSWORD=your_admin_password
+ANTHROPIC_API_KEY=sk-ant-...
+MIKROTIK_HOST=192.168.1.200
+MIKROTIK_USER=nebulanet
+MIKROTIK_PASS=your_mikrotik_password
+MIKROTIK_ADMIN_PASS=your_admin_password
+```
 
+### 3. Запуск
 ```bash
-docker compose logs -f collector   # NetFlow + syslog parser
-docker compose logs -f api         # REST API
-docker compose logs -f clickhouse  # DB
+docker compose up -d
 ```
 
-## Production checklist
+### 4. Настройка MikroTik
+```routeros
+# Создать пользователя
+/user add name=nebulanet password=YourPass group=write
 
-- [ ] Set strong passwords in `.env`
-- [ ] Put API behind Nginx + SSL
-- [ ] Restrict ClickHouse/Postgres ports (don't expose to internet)
-- [ ] Set up log rotation for Docker
-- [ ] Schedule daily ClickHouse backup: `clickhouse-client --query "BACKUP TABLE flows TO Disk('backups', 'flows.bak')"`
+# NetFlow
+/ip traffic-flow set enabled=yes interfaces=all
+/ip traffic-flow set active-flow-timeout=1m inactive-flow-timeout=15s
+/ip traffic-flow target add dst-address=SERVER_IP port=2055 version=9
+
+# DNS логирование
+/ip dns set allow-remote-requests=yes
+/system logging action set remote remote=SERVER_IP remote-port=514
+/system logging add topics=dns action=remote
+/system logging add topics=dhcp action=remote
+
+# DNS редирект (для каждого интерфейса)
+/ip firewall nat add chain=dstnat protocol=udp dst-port=53 \
+  in-interface=User action=redirect to-ports=53
+/ip firewall nat add chain=dstnat protocol=tcp dst-port=53 \
+  in-interface=User action=redirect to-ports=53
+```
+
+## Структура проекта
+```
+mikrotik-monitor/
+├── api/
+│   ├── main.py          # FastAPI backend
+│   ├── dashboard.html   # Single-page frontend
+│   └── requirements.txt
+├── collector/
+│   └── main.py          # NetFlow + DNS collector
+├── migrations/
+│   ├── clickhouse/      # ClickHouse схемы
+│   └── postgres/        # PostgreSQL схемы
+├── docker-compose.yml
+├── .env.example
+└── README.md
+```
+
+## API эндпоинты
+
+### Мониторинг
+| Метод | URL | Описание |
+|-------|-----|----------|
+| GET | /api/devices | Список устройств |
+| GET | /api/reports/summary | Общая статистика |
+| GET | /api/reports/dns-activity | DNS активность |
+| GET | /api/reports/ip-activity | Активность по IP |
+| GET | /api/reports/device-traffic | Трафик по устройствам |
+| GET | /api/reports/device-categories | Категории по устройствам |
+| GET | /api/reports/domain-users | Кто заходил на домен |
+
+### Категории
+| Метод | URL | Описание |
+|-------|-----|----------|
+| GET | /api/domain-categories | Все категории |
+| POST | /api/domain-categories | Сохранить категорию |
+| DELETE | /api/domain-categories/{name} | Удалить категорию |
+| GET | /api/domain-category?domain=X | AI анализ домена |
+
+### Блокировки
+| Метод | URL | Описание |
+|-------|-----|----------|
+| GET | /api/block/list | Список блокировок |
+| POST | /api/block/domain | Заблокировать домен |
+| POST | /api/block/unblock | Разблокировать |
+| POST | /api/block/toggle | Вкл/выкл блокировку |
+| GET | /api/mikrotik/subnets | Подсети из MikroTik |
+
+### Отделы
+| Метод | URL | Описание |
+|-------|-----|----------|
+| GET | /api/departments | Список отделов |
+| POST | /api/departments | Добавить IP в отдел |
+| DELETE | /api/departments/{dept}/members/{ip} | Удалить из отдела |
+
+## Функции
+
+### Мониторинг
+- Real-time DNS мониторинг (NetFlow v9 + Syslog)
+- 161+ устройств с онлайн статусом
+- Категории активности: Работа / Соцсети / Игры / Развлечения / Система
+- Фильтр времени: 1ч / 24ч / Всё
+- Трафик: 1ч / 1д / 7д / 30д
+- Поиск по IP, имени, MAC
+- Фильтр по типу: ПК / Телефон / SIP / Другие
+
+### AI анализ
+- Категоризация доменов через Claude API
+- Учёт кастомных правил компании
+- Анализ субдоменов
+- Проверка на вирусы/фишинг
+- Пакетный анализ всех доменов пользователя
+
+### Блокировки (MikroTik)
+- Блокировка по отделу (address-list)
+- Блокировка по подсети
+- Вкл/выкл без удаления
+- Автоматическое создание firewall правил
+- Синхронизация с MikroTik
+
+## База данных
+
+### PostgreSQL
+```sql
+devices          -- устройства с last_seen
+users            -- пользователи
+domain_categories -- категории доменов (535+)
+blocked_domains  -- история блокировок
+departments      -- отделы (через MikroTik address-list)
+```
+
+### ClickHouse
+```sql
+flows     -- NetFlow данные (TTL 90 дней)
+dns_log   -- DNS запросы (TTL 90 дней)
+```
+
+## Сервер
+- **IP**: 192.168.1.53
+- **OS**: Ubuntu 24
+- **User**: tehron
+- **Path**: /home/tehron/nebulanet
+
+## Команды
+```bash
+# Запуск
+docker compose up -d
+
+# Логи коллектора
+docker compose logs collector -f
+
+# Логи API
+docker compose logs api -f
+
+# Перезапуск после изменений
+docker compose up -d --build api
+
+# Бэкап PostgreSQL
+docker exec nebulanet-postgres pg_dump -U nebulanet nebulanet > backup.sql
+
+# Статус
+docker compose ps
+```
+
+## Переменные окружения
+
+| Переменная | Описание | По умолчанию |
+|-----------|----------|--------------|
+| POSTGRES_PASSWORD | Пароль PostgreSQL | nebulanet_secret |
+| CLICKHOUSE_PASSWORD | Пароль ClickHouse | nebulanet_secret |
+| ADMIN_PASSWORD | Пароль админки | admin2024 |
+| ANTHROPIC_API_KEY | Claude API ключ | — |
+| MIKROTIK_HOST | IP MikroTik | 192.168.1.200 |
+| MIKROTIK_USER | Пользователь MikroTik | nebulanet |
+| MIKROTIK_PASS | Пароль пользователя | — |
+| MIKROTIK_ADMIN_PASS | Пароль admin | — |
+
+## Лицензия
+MIT
