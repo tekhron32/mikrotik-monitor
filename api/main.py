@@ -787,9 +787,13 @@ async def block_domain(body: dict):
     """Добавить домен в block list + создать правило для отдела"""
     domain = body.get("domain","").strip()
     department = body.get("department","").strip()
+    target_type = body.get("target_type","dept").strip()
     comment = body.get("comment", f"NebulaNet: {domain}")
     if not domain:
         return {"ok": False, "error": "domain required"}
+    import re as _re
+    # Определяем это подсеть или address-list
+    is_subnet = target_type == 'subnet' or bool(_re.match(r'^\d+\.\d+\.\d+\.\d+', department))
     try:
         mt = get_mikrotik()
         # 1. Добавляем домен в address-list 'block'
@@ -802,35 +806,56 @@ async def block_domain(body: dict):
         except Exception:
             pass  # уже существует
 
-        # 2. Если указан отдел — создаём правило если его нет
+        # 2. Создаём правило блокировки
         if department and department != 'all':
             rules = list(mt(cmd='/ip/firewall/filter/print'))
-            rule_exists = any(
-                r.get('src-address-list') == department and
-                r.get('dst-address-list') == 'block' and
-                r.get('chain') == 'forward' and
-                not r.get('disabled')
-                for r in rules
-            )
-            if not rule_exists:
-                # Ставим правило перед первым accept all
-                accept_all = next((r for r in rules if r.get('chain')=='forward' and r.get('action')=='accept' and not r.get('src-address-list') and not r.get('dst-address-list') and not r.get('disabled')), None)
-                # Получаем первое правило в forward chain — ставим перед ним
-                forward_rules = [r for r in rules if r.get('chain')=='forward']
-                first_rule_id = forward_rules[0]['.id'] if forward_rules else None
+            forward_rules = [r for r in rules if r.get('chain')=='forward']
+            first_rule_id = forward_rules[0]['.id'] if forward_rules else None
 
-                kwargs = {
-                    'chain': 'forward',
-                    'src-address-list': department,
-                    'dst-address-list': 'block',
-                    'action': 'reject',
-                    'reject-with': 'icmp-network-unreachable',
-                    'comment': f'NebulaNet: block for {department}'
-                }
-                if first_rule_id:
-                    kwargs['place-before'] = first_rule_id  # в самый верх!
-                list(mt(cmd='/ip/firewall/filter/add', **kwargs))
-                log.info("Created filter rule for department: %s", department)
+            if is_subnet:
+                # Блокировка по подсети
+                rule_exists = any(
+                    r.get('src-address') == department and
+                    r.get('dst-address-list') == 'block' and
+                    r.get('chain') == 'forward' and
+                    not r.get('disabled')
+                    for r in rules
+                )
+                if not rule_exists:
+                    kwargs = {
+                        'chain': 'forward',
+                        'src-address': department,
+                        'dst-address-list': 'block',
+                        'action': 'reject',
+                        'reject-with': 'icmp-network-unreachable',
+                        'comment': f'NebulaNet: block subnet {department}'
+                    }
+                    if first_rule_id:
+                        kwargs['place-before'] = first_rule_id
+                    list(mt(cmd='/ip/firewall/filter/add', **kwargs))
+                    log.info("Created subnet block rule for %s", department)
+            else:
+                # Блокировка по address-list (отдел)
+                rule_exists = any(
+                    r.get('src-address-list') == department and
+                    r.get('dst-address-list') == 'block' and
+                    r.get('chain') == 'forward' and
+                    not r.get('disabled')
+                    for r in rules
+                )
+                if not rule_exists:
+                    kwargs = {
+                        'chain': 'forward',
+                        'src-address-list': department,
+                        'dst-address-list': 'block',
+                        'action': 'reject',
+                        'reject-with': 'icmp-network-unreachable',
+                        'comment': f'NebulaNet: block for {department}'
+                    }
+                    if first_rule_id:
+                        kwargs['place-before'] = first_rule_id
+                    list(mt(cmd='/ip/firewall/filter/add', **kwargs))
+                    log.info("Created filter rule for department: %s", department)
 
         mt.close()
 
