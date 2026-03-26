@@ -422,7 +422,7 @@ async function act(dev,h,keepFilters=false){
       </div>
       <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
         <button onclick="aiAnalyzeAll('${nm.replace(/'/g,"\\'")}',event)" style="background:rgba(139,92,246,.15);border:1px solid var(--purple);color:var(--purple);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px;font-family:var(--sans);display:flex;align-items:center;gap:5px" title="AI проверит все домены и назначит категории">🤖 AI анализ</button>
-        <div class="time-filter">${[1,4,24,168,0].map(x=>`<button class="time-btn${x===h?' active':''}" onclick="chH(${x})">${x===168?'7д':x===0?'Всё':x+'ч'}</button>`).join('')}</div>
+        <div class="time-filter">${[1,4,24,168,0].map(x=>`<button class="time-btn${x===hours?' active':''}" onclick="chH(${x})">${x===168?'7д':x===0?'Всё':x+'ч'}</button>`).join('')}</div>
       </div>
     </div>
     <div class="loading"><div class="spinner"></div>Загрузка...</div>`;
@@ -431,8 +431,9 @@ async function act(dev,h,keepFilters=false){
     const d=await r.json();const rows=d.data||[];
     const total=rows.reduce((s,x)=>s+x.hits,0);
     document.getElementById('act-count').textContent=total+' запросов';
+    const savedCatFilter = keepFilters ? catFilter : null;
     devRows=rows;
-    catFilter = savedCatFilter; // восстанавливаем если keepFilters
+    catFilter = savedCatFilter;
     const catTotals={};
     rows.forEach(row=>{const c=getCat(svc(row.domain));catTotals[c]=(catTotals[c]||0)+row.hits;});
     const catBarEl=document.createElement('div');
