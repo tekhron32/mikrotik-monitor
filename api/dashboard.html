@@ -849,8 +849,10 @@ async function loadBlockPage(){
     // Загружаем подсети из MikroTik
     const sr = await fetch('/api/mikrotik/subnets');
     const sd = await sr.json();
-    const subnetsData = sd.subnets || [];
-    const deptsData = depts;
+    window._subnetsData = sd.subnets || [];
+    window._deptsData = depts;
+    const subnetsData = window._subnetsData;
+    const deptsData = window._deptsData;
 
     el.innerHTML = `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
@@ -864,7 +866,7 @@ async function loadBlockPage(){
           </div>
           <div>
             <div style="font-size:11px;color:var(--text2);margin-bottom:4px">Применить к</div>
-            <select id="block-target-type" class="inp" style="width:100%;cursor:pointer;margin-bottom:6px" onchange="toggleBlockTarget(subnetsData,deptsData)">
+            <select id="block-target-type" class="inp" style="width:100%;cursor:pointer;margin-bottom:6px" onchange="toggleBlockTarget()">
               <option value="dept">Отдел</option>
               <option value="subnet">Подсеть</option>
             </select>
@@ -876,7 +878,6 @@ async function loadBlockPage(){
             <div id="block-subnet-wrap" style="display:none">
               <select id="block-subnet-sel" class="inp" style="width:100%;cursor:pointer;margin-bottom:4px">
                 <option value="">— выберите подсеть —</option>
-                ${(subnetsData||[]).map(s=>`<option value="${s.subnet}">${s.subnet} (${s.interface})</option>`).join('')}
               </select>
               <input id="block-subnet-inp" class="inp" style="width:100%;margin-top:4px" placeholder="или введите вручную: 192.168.1.0/24">
             </div>
@@ -956,10 +957,20 @@ async function toggleBlock(id, currentlyDisabled){
   }catch(e){toast('Ошибка','red');}
 }
 
-function toggleBlockTarget(subnets, depts){
+function toggleBlockTarget(){
   const type = document.getElementById('block-target-type')?.value;
   document.getElementById('block-dept-wrap').style.display = type==='dept'?'':'none';
   document.getElementById('block-subnet-wrap').style.display = type==='subnet'?'':'none';
+  // Заполняем список подсетей
+  if(type==='subnet'){
+    const sel = document.getElementById('block-subnet-sel');
+    if(sel && (window._subnetsData||[]).length > 0){
+      sel.innerHTML = '<option value="">— выберите подсеть —</option>' +
+        (window._subnetsData||[]).map(s=>
+          `<option value="${s.subnet}">${s.subnet} (${s.interface})</option>`
+        ).join('');
+    }
+  }
 }
 
 async function addBlock(){
