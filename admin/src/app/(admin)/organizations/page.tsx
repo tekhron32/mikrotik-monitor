@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma'
 import Link from 'next/link'
+import { OrgToggleButton } from '@/components/organizations/org-toggle-button'
 
 async function getOrganizations() {
   return prisma.organization.findMany({
@@ -42,17 +43,18 @@ export default async function OrganizationsPage() {
               <th className="px-4 py-3 text-left text-xs text-slate-500 uppercase tracking-wider">Организация</th>
               <th className="px-4 py-3 text-left text-xs text-slate-500 uppercase tracking-wider">Отрасль</th>
               <th className="px-4 py-3 text-left text-xs text-slate-500 uppercase tracking-wider">Тариф</th>
-              <th className="px-4 py-3 text-center text-xs text-slate-500 uppercase tracking-wider">Устройства</th>
+              <th className="px-4 py-3 text-center text-xs text-slate-500 uppercase tracking-wider">Устр.</th>
               <th className="px-4 py-3 text-center text-xs text-slate-500 uppercase tracking-wider">Польз.</th>
               <th className="px-4 py-3 text-center text-xs text-slate-500 uppercase tracking-wider">AI</th>
               <th className="px-4 py-3 text-center text-xs text-slate-500 uppercase tracking-wider">Статус</th>
+              <th className="px-4 py-3 text-center text-xs text-slate-500 uppercase tracking-wider">Вкл/Выкл</th>
               <th className="px-4 py-3"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[#1e2535]">
             {orgs.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-12 text-center text-sm text-slate-600">
+                <td colSpan={9} className="px-4 py-12 text-center text-sm text-slate-600">
                   Организаций пока нет
                 </td>
               </tr>
@@ -73,9 +75,7 @@ export default async function OrganizationsPage() {
                 </td>
                 <td className="px-4 py-3 text-sm text-slate-400">
                   {org.industry ? (
-                    <span className="flex items-center gap-1">
-                      {org.industry.icon} {org.industry.name}
-                    </span>
+                    <span>{org.industry.icon} {org.industry.name}</span>
                   ) : (
                     <span className="text-slate-600">—</span>
                   )}
@@ -90,18 +90,23 @@ export default async function OrganizationsPage() {
                   {org._count.users} / {org.userLimit}
                 </td>
                 <td className="px-4 py-3 text-center">
-                  {org.aiEnabled ? (
-                    <span className="inline-flex w-2 h-2 rounded-full bg-green-400"></span>
-                  ) : (
-                    <span className="inline-flex w-2 h-2 rounded-full bg-slate-600"></span>
-                  )}
+                  {org.aiEnabled
+                    ? <span className="inline-flex w-2 h-2 rounded-full bg-green-400"></span>
+                    : <span className="inline-flex w-2 h-2 rounded-full bg-slate-600"></span>
+                  }
                 </td>
                 <td className="px-4 py-3 text-center">
-                  {org.isActive ? (
-                    <span className="inline-flex px-2 py-0.5 rounded bg-green-500/10 text-green-400 border border-green-500/20 text-xs">Активна</span>
-                  ) : (
-                    <span className="inline-flex px-2 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20 text-xs">Отключена</span>
-                  )}
+                  {org.isActive
+                    ? <span className="inline-flex px-2 py-0.5 rounded bg-green-500/10 text-green-400 border border-green-500/20 text-xs">Активна</span>
+                    : <span className="inline-flex px-2 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20 text-xs">Выключена</span>
+                  }
+                </td>
+                <td className="px-4 py-3 text-center">
+                  <OrgToggleButton
+                    orgId={org.id}
+                    orgName={org.name}
+                    isActive={org.isActive}
+                  />
                 </td>
                 <td className="px-4 py-3 text-right">
                   <Link

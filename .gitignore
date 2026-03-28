@@ -22,3 +22,4 @@ admin/.next/
 admin/.env
 admin/.env.local
 packages/node_modules/
+api/main.py.backup
