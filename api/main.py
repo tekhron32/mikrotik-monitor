@@ -50,7 +50,20 @@ async def lifespan(app):
         os.getenv("POSTGRES_DSN"), min_size=2, max_size=10
     )
     log.info("API ready")
+    # Запускаем фоновый heartbeat
+    import asyncio
+    async def heartbeat_loop():
+        await asyncio.sleep(10)  # Первый heartbeat через 10 сек после старта
+        while True:
+            try:
+                await send_heartbeat()
+            except Exception as e:
+                log.warning(f"Heartbeat loop error: {e}")
+            await asyncio.sleep(300)  # Каждые 5 минут
+
+    task = asyncio.create_task(heartbeat_loop())
     yield
+    task.cancel()
     if _pg_pool:
         await _pg_pool.close()
 
