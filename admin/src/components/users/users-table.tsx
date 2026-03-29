@@ -43,7 +43,7 @@ export function UsersTable({ users: initial, organizations }: Props) {
       })
       if (res.ok) {
         setShowForm(false)
-        router.refresh()
+        window.location.reload()
       }
     } finally {
       setSaving(false)
