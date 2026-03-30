@@ -1,217 +1,309 @@
-# NebulaNet Monitor v1.0
+# NebulaNet Network Monitor
 
-Система мониторинга сети на базе MikroTik с AI-анализом доменов.
+> SaaS платформа мониторинга сети на базе MikroTik с AI-анализом трафика
 
-## Стек
-- **Backend**: FastAPI + Python
-- **Frontend**: Vanilla JS (Single HTML)
-- **БД**: PostgreSQL + ClickHouse + Redis
-- **Инфра**: Docker Compose
-- **Router**: MikroTik RouterOS 7.x
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+---
 
 ## Архитектура
+
 ```
-MikroTik (192.168.1.200)
-  ├── NetFlow v9 → :2055/udp
-  └── Syslog DNS → :514/udp
-          ↓
-    Collector (Python)
-          ↓
-  ClickHouse (flows, dns_log)
-  PostgreSQL (devices, users, categories, blocks)
-          ↓
-    FastAPI → Dashboard (port 8000)
+┌─────────────────────────────┐       ┌──────────────────────────────┐
+│   v2.0 Super Admin Portal   │◄─────►│   v1.0 Network Monitor       │
+│   admin.nebulanet.uz:3001   │  sync │   client-server.com:8000     │
+│                             │       │                              │
+│  • Управление клиентами     │       │  • Real-time DNS мониторинг  │
+│  • Лицензии и биллинг       │       │  • NetFlow v9 аналитика      │
+│  • Heartbeat статус          │       │  • AI анализ доменов         │
+│  • Синхронизация данных     │       │  • Блокировки через MikroTik │
+└─────────────────────────────┘       └──────────────────────────────┘
 ```
 
-## Быстрый старт
+---
 
-### 1. Клонирование
+## Быстрая установка v1.0 (для клиента)
+
+### Способ 1 — Одна команда
 ```bash
-git clone git@github.com:boykulov/mikrotik-monitor.git
-cd mikrotik-monitor
+curl -fsSL https://raw.githubusercontent.com/boykulov/mikrotik-monitor/main/deploy-template/install.sh | sudo bash
 ```
 
-### 2. Настройка .env
+### Способ 2 — Вручную
 ```bash
+git clone https://github.com/boykulov/mikrotik-monitor.git /opt/nebulanet
+cd /opt/nebulanet
+sudo bash deploy-template/install.sh
+```
+
+Скрипт установит Docker, настроит базы данных, создаст `.env` и запустит все сервисы.
+
+---
+
+## Установка v2.0 Super Admin Portal
+
+### Требования
+- Node.js 20+
+- PostgreSQL 16
+- Redis
+
+### Установка
+```bash
+# Клонируем репозиторий
+git clone https://github.com/boykulov/mikrotik-monitor.git
+cd mikrotik-monitor/admin
+
+# Устанавливаем зависимости
+npm install
+
+# Настраиваем окружение
 cp .env.example .env
-nano .env
+nano .env  # Заполни DATABASE_URL и AUTH_SECRET
+
+# Запускаем миграции
+npx prisma migrate deploy
+npx prisma db seed
+
+# Запускаем
+PORT=3001 npm run dev
+# или в продакшене:
+PORT=3001 npm run build && npm start
 ```
 
-Заполни:
-```env
-POSTGRES_PASSWORD=your_password
-CLICKHOUSE_PASSWORD=your_password
-ADMIN_PASSWORD=your_admin_password
-ANTHROPIC_API_KEY=sk-ant-...
-MIKROTIK_HOST=192.168.1.200
-MIKROTIK_USER=nebulanet
-MIKROTIK_PASS=your_mikrotik_password
-MIKROTIK_ADMIN_PASS=your_admin_password
-```
+### Первый вход
+- URL: `http://YOUR_SERVER:3001`
+- Email: `admin@nebulanet.local`
+- Пароль: `NebulaAdmin2024!` (смени после входа в Настройках)
 
-### 3. Запуск
-```bash
-docker compose up -d
-```
+---
 
-### 4. Настройка MikroTik
+## Настройка MikroTik
+
+Выполни на устройстве клиента (RouterOS 7.x):
+
 ```routeros
-# Создать пользователя
-/user add name=nebulanet password=YourPass group=write
+# 1. Создать пользователя для API
+/user add name=nebulanet password=YOUR_PASSWORD group=write
 
-# NetFlow
+# 2. NetFlow — отправка данных о трафике
 /ip traffic-flow set enabled=yes interfaces=all
 /ip traffic-flow set active-flow-timeout=1m inactive-flow-timeout=15s
 /ip traffic-flow target add dst-address=SERVER_IP port=2055 version=9
 
-# DNS логирование
+# 3. DNS логирование через Syslog
 /ip dns set allow-remote-requests=yes
 /system logging action set remote remote=SERVER_IP remote-port=514
 /system logging add topics=dns action=remote
 /system logging add topics=dhcp action=remote
 
-# DNS редирект (для каждого интерфейса)
+# 4. DNS редирект (для перехвата DNS запросов)
 /ip firewall nat add chain=dstnat protocol=udp dst-port=53 \
-  in-interface=User action=redirect to-ports=53
+  in-interface=bridge action=redirect to-ports=53
 /ip firewall nat add chain=dstnat protocol=tcp dst-port=53 \
-  in-interface=User action=redirect to-ports=53
+  in-interface=bridge action=redirect to-ports=53
 ```
 
-## Структура проекта
+---
+
+## Добавление нового клиента (пошагово)
+
+### Шаг 1 — Создать организацию в Super Admin
+1. Зайди на `admin.nebulanet.uz:3001`
+2. Перейди в **Организации → + Добавить**
+3. Заполни название, отрасль, тариф
+4. Скопируй **License Key** из карточки организации
+
+### Шаг 2 — Развернуть v1.0 на сервере клиента
+```bash
+# На сервере клиента (Ubuntu 20.04+)
+curl -fsSL https://raw.githubusercontent.com/boykulov/mikrotik-monitor/main/deploy-template/install.sh | sudo bash
+
+# Скрипт спросит:
+# • Название организации
+# • License Key (из шага 1)
+# • IP MikroTik
+# • Логин/пароль MikroTik API
+# • Anthropic API Key (опционально, для AI анализа)
+```
+
+### Шаг 3 — Настроить MikroTik
+Выполни команды из раздела выше, указав `SERVER_IP` = IP сервера клиента
+
+### Шаг 4 — Проверить работу
+- Открой `http://CLIENT_SERVER:8000`
+- В Super Admin Dashboard должен появиться **Online** статус для организации
+- Heartbeat обновляется каждые 5 минут автоматически
+
+---
+
+## Управление лицензиями
+
+### Заблокировать клиента
+В Super Admin → Организации → нажми тогл **Вкл/Выкл**
+
+Клиент немедленно увидит страницу блокировки при обновлении мониторинга.
+
+### Разблокировать
+Тот же тогл — клиент снова получает доступ мгновенно.
+
+---
+
+## Стек технологий
+
+### v1.0 — Network Monitor
+| Компонент | Технология |
+|-----------|-----------|
+| Backend | FastAPI + Python 3.12 |
+| Frontend | Vanilla JS (Single HTML) |
+| База данных | PostgreSQL 16 |
+| Аналитика | ClickHouse |
+| Кэш | Redis |
+| Инфраструктура | Docker Compose |
+| Router | MikroTik RouterOS 7.x |
+| AI | Anthropic Claude API |
+
+### v2.0 — Super Admin Portal
+| Компонент | Технология |
+|-----------|-----------|
+| Frontend + API | Next.js 16 (App Router) |
+| База данных | PostgreSQL 16 + Prisma 6 |
+| UI | Tailwind CSS + Shadcn/ui |
+| Auth | Cookie-based JWT |
+| Язык | TypeScript |
+
+---
+
+## Функциональность
+
+### v1.0 Network Monitor
+- ✅ Real-time DNS мониторинг (NetFlow v9 + Syslog)
+- ✅ 161+ устройств с онлайн статусом
+- ✅ Категории активности: Работа / Соцсети / Игры / Развлечения / Система
+- ✅ Фильтр времени: 1ч / 24ч / Всё
+- ✅ Трафик: 1ч / 1д / 7д / 30д
+- ✅ AI анализ доменов (Claude API)
+- ✅ Блокировки доменов через MikroTik API
+- ✅ Управление отделами (address-list)
+- ✅ Авторизация с ролями (admin / manager / viewer)
+- ✅ Система лицензий (блокировка при неоплате)
+
+### v2.0 Super Admin Portal
+- ✅ Dashboard со статистикой платформы
+- ✅ Управление организациями (CRUD + тогл блокировки)
+- ✅ Управление устройствами MikroTik (CRUD + Ping)
+- ✅ Управление пользователями с ролями
+- ✅ База доменов (535+ категорий)
+- ✅ Синхронизация данных v1.0 → v2.0
+- ✅ Heartbeat мониторинг серверов
+- ✅ License Key система
+- ✅ Смена пароля через UI и терминал
+
+---
+
+## Структура репозитория
+
 ```
 mikrotik-monitor/
-├── api/
-│   ├── main.py          # FastAPI backend
-│   ├── dashboard.html   # Single-page frontend
+├── api/                    # v1.0 FastAPI бэкенд
+│   ├── main.py             # Основной сервер (~1100 строк)
+│   ├── dashboard.html      # Single-page фронтенд
 │   └── requirements.txt
-├── collector/
-│   └── main.py          # NetFlow + DNS collector
-├── migrations/
-│   ├── clickhouse/      # ClickHouse схемы
-│   └── postgres/        # PostgreSQL схемы
-├── docker-compose.yml
+├── collector/              # NetFlow + Syslog коллектор
+├── migrations/             # Схемы БД
+│   ├── clickhouse/
+│   └── postgres/
+├── admin/                  # v2.0 Super Admin Portal
+│   ├── src/
+│   │   ├── app/            # Next.js App Router
+│   │   ├── components/     # React компоненты
+│   │   ├── lib/            # Prisma, Auth
+│   │   └── types/
+│   └── prisma/
+│       └── schema.prisma   # Схема БД v2.0
+├── deploy-template/        # Шаблон для деплоя клиентов
+│   ├── install.sh          # Скрипт установки
+│   └── README.md
+├── docker-compose.yml      # v1.0 Docker конфигурация
 ├── .env.example
-└── README.md
+└── CONTEXT.md              # Контекст для AI разработки
 ```
 
-## API эндпоинты
+---
 
-### Мониторинг
-| Метод | URL | Описание |
-|-------|-----|----------|
-| GET | /api/devices | Список устройств |
-| GET | /api/reports/summary | Общая статистика |
-| GET | /api/reports/dns-activity | DNS активность |
-| GET | /api/reports/ip-activity | Активность по IP |
-| GET | /api/reports/device-traffic | Трафик по устройствам |
-| GET | /api/reports/device-categories | Категории по устройствам |
-| GET | /api/reports/domain-users | Кто заходил на домен |
+## Переменные окружения v1.0
 
-### Категории
-| Метод | URL | Описание |
-|-------|-----|----------|
-| GET | /api/domain-categories | Все категории |
-| POST | /api/domain-categories | Сохранить категорию |
-| DELETE | /api/domain-categories/{name} | Удалить категорию |
-| GET | /api/domain-category?domain=X | AI анализ домена |
+| Переменная | Описание | Пример |
+|------------|----------|--------|
+| `POSTGRES_PASSWORD` | Пароль PostgreSQL | `secret123` |
+| `CLICKHOUSE_PASSWORD` | Пароль ClickHouse | `secret123` |
+| `ADMIN_PASSWORD` | Пароль для входа | `Admin2024!` |
+| `ANTHROPIC_API_KEY` | Claude API ключ | `sk-ant-...` |
+| `MIKROTIK_HOST` | IP MikroTik | `192.168.1.1` |
+| `MIKROTIK_USER` | Пользователь API | `nebulanet` |
+| `MIKROTIK_PASS` | Пароль API | `password` |
+| `LICENSE_KEY` | Ключ лицензии от v2.0 | `org_abc123` |
+| `ADMIN_URL` | URL Super Admin v2.0 | `http://admin.nebulanet.uz:3001` |
 
-### Блокировки
-| Метод | URL | Описание |
-|-------|-----|----------|
-| GET | /api/block/list | Список блокировок |
-| POST | /api/block/domain | Заблокировать домен |
-| POST | /api/block/unblock | Разблокировать |
-| POST | /api/block/toggle | Вкл/выкл блокировку |
-| GET | /api/mikrotik/subnets | Подсети из MikroTik |
+---
 
-### Отделы
-| Метод | URL | Описание |
-|-------|-----|----------|
-| GET | /api/departments | Список отделов |
-| POST | /api/departments | Добавить IP в отдел |
-| DELETE | /api/departments/{dept}/members/{ip} | Удалить из отдела |
+## Команды управления v1.0
 
-## Функции
-
-### Мониторинг
-- Real-time DNS мониторинг (NetFlow v9 + Syslog)
-- 161+ устройств с онлайн статусом
-- Категории активности: Работа / Соцсети / Игры / Развлечения / Система
-- Фильтр времени: 1ч / 24ч / Всё
-- Трафик: 1ч / 1д / 7д / 30д
-- Поиск по IP, имени, MAC
-- Фильтр по типу: ПК / Телефон / SIP / Другие
-
-### AI анализ
-- Категоризация доменов через Claude API
-- Учёт кастомных правил компании
-- Анализ субдоменов
-- Проверка на вирусы/фишинг
-- Пакетный анализ всех доменов пользователя
-
-### Блокировки (MikroTik)
-- Блокировка по отделу (address-list)
-- Блокировка по подсети
-- Вкл/выкл без удаления
-- Автоматическое создание firewall правил
-- Синхронизация с MikroTik
-
-## База данных
-
-### PostgreSQL
-```sql
-devices          -- устройства с last_seen
-users            -- пользователи
-domain_categories -- категории доменов (535+)
-blocked_domains  -- история блокировок
-departments      -- отделы (через MikroTik address-list)
-```
-
-### ClickHouse
-```sql
-flows     -- NetFlow данные (TTL 90 дней)
-dns_log   -- DNS запросы (TTL 90 дней)
-```
-
-## Сервер
-- **IP**: 192.168.1.53
-- **OS**: Ubuntu 24
-- **User**: tehron
-- **Path**: /home/tehron/nebulanet
-
-## Команды
 ```bash
-# Запуск
-docker compose up -d
+cd /opt/nebulanet
 
-# Логи коллектора
-docker compose logs collector -f
+# Статус
+docker compose ps
 
 # Логи API
 docker compose logs api -f
 
-# Перезапуск после изменений
-docker compose up -d --build api
+# Логи коллектора
+docker compose logs collector -f
 
-# Бэкап PostgreSQL
-docker exec nebulanet-postgres pg_dump -U nebulanet nebulanet > backup.sql
+# Перезапуск после обновления
+git pull && docker compose up -d --build
 
-# Статус
-docker compose ps
+# Бэкап БД
+docker exec nebulanet-postgres pg_dump -U nebulanet nebulanet > backup_$(date +%Y%m%d).sql
 ```
 
-## Переменные окружения
+## Команды управления v2.0
 
-| Переменная | Описание | По умолчанию |
-|-----------|----------|--------------|
-| POSTGRES_PASSWORD | Пароль PostgreSQL | nebulanet_secret |
-| CLICKHOUSE_PASSWORD | Пароль ClickHouse | nebulanet_secret |
-| ADMIN_PASSWORD | Пароль админки | admin2024 |
-| ANTHROPIC_API_KEY | Claude API ключ | — |
-| MIKROTIK_HOST | IP MikroTik | 192.168.1.200 |
-| MIKROTIK_USER | Пользователь MikroTik | nebulanet |
-| MIKROTIK_PASS | Пароль пользователя | — |
-| MIKROTIK_ADMIN_PASS | Пароль admin | — |
+```bash
+cd /opt/nebulanet/admin
+
+# Разработка
+PORT=3001 npm run dev
+
+# Продакшен
+npm run build && PORT=3001 npm start
+
+# Миграции БД
+npx prisma migrate dev --name НАЗВАНИЕ
+
+# Просмотр БД
+npx prisma studio
+
+# Смена пароля SuperAdmin через терминал
+python3 -c "import bcrypt; print(bcrypt.hashpw(b'НовыйПароль', bcrypt.gensalt(12)).decode())"
+# Скопируй хеш и выполни:
+docker exec nebulanet-postgres psql -U nebulanet -d nebulanet_v2 \
+  -c "UPDATE super_admins SET password='ХЕШ' WHERE email='admin@nebulanet.local';"
+```
+
+---
+
+## Открытые порты
+
+| Порт | Протокол | Сервис |
+|------|----------|--------|
+| 8000 | TCP | v1.0 Web интерфейс |
+| 3001 | TCP | v2.0 Super Admin |
+| 2055 | UDP | NetFlow v9 |
+| 514  | UDP | Syslog |
+
+---
 
 ## Лицензия
-MIT
+
+MIT © 2026 NebulaNet
